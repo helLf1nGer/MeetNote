@@ -6,10 +6,7 @@ from groq import Groq
 from pyannote.audio import Pipeline
 from faster_whisper import WhisperModel
 from pydub import AudioSegment
-
-# Add the project root directory to the Python path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import torch
 from src.utils.config_manager import ConfigManager
 
 def test_env_variables():
@@ -81,6 +78,16 @@ def test_whisper_model():
     except Exception as e:
         print(f"❌ Error loading Whisper model: {str(e)}")
 
+def test_cuda_support():
+    if torch.cuda.is_available():
+        device_count = torch.cuda.device_count()
+        print(f"✅ CUDA support available with {device_count} GPU(s)")
+        for i in range(device_count):
+            device_name = torch.cuda.get_device_name(i)
+            print(f"   GPU {i}: {device_name}")
+    else:
+        print("❌ CUDA support not available")
+
 if __name__ == "__main__":
     print("Running MeetNote setup tests...")
     test_env_variables()
@@ -90,4 +97,5 @@ if __name__ == "__main__":
     test_groq_connection()
     test_huggingface_connection()
     test_whisper_model()
+    test_cuda_support()
     print("Setup tests completed.")

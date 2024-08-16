@@ -1,7 +1,9 @@
+--index-url https://download.pytorch.org/whl/cu118
+torch
+torchvision
+torchaudio
 pydub==0.25.1
 pyannote.audio==3.3.1
-torch==2.3.1
-torchaudio==2.3.1
 faster-whisper==1.0.2
 groq==0.9.0
 fpdf2==2.7.9
