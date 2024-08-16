@@ -1,0 +1,68 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+pycache_/
+*.pyc
+
+# Virtual environments
+venv/
+test_venv/
+
+# Environment variables
+.env
+
+# Transcriptions output
+Transcriptions/
+
+# Node modules
+node_modules/
+
+# Config files (if they contain sensitive information)
+#Config/
+Config/config.json
+# Don't ignore the template
+!config.template.json
+
+# Stable directory (development versions)
+Stable/
+
+# Tests
+tests/
+
+# IDE specific files
+.vscode/
+.idea/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Logs
+*.log
+
+# Ignore .aidigestignore file
+.aidigestignore
+
+# Keep the following directories if they contain important project files
+# Uncomment if you want to track these
+# Docs/
+Fonts/DejaVuSans.ttf
+# Icon/
+Project with Claude/
+dejavu-sans/
+
+# Specific project files
+# codebase_*.md are aidigest specific files
+codebase_*.md 
+
+# npm related files (keep these for node projects)
+package-lock.json
+package.json

@@ -1,0 +1,32 @@
+{
+    "misc": {
+        "print_to_terminal": true
+    },
+    "model_options": {
+        "local": {
+            "model": "medium.en",
+            "device": "cuda",
+            "compute_type": "float16"
+        },
+        "groq": {
+            "model": "whisper-large-v3"
+        }
+    },
+    "use_cuda": true,
+    "output_directory": "PATH_TO_YOUR_OUTPUT_DIRECTORY",
+    "diarization": {
+        "min_speakers": 1,
+        "max_speakers": 10,
+        "default_num_speakers": 2
+    },
+    "transcription": {
+        "language": "en",
+        "task": "transcribe"
+    },
+    "pdf_output": {
+        "font_size": 12,
+        "line_spacing": 1.2
+    },
+    "last_directory": "PATH_TO_YOUR_LAST_DIRECTORY",
+    "gui_theme": "cyborg"
+}
