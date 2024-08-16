@@ -29,6 +29,8 @@ MeetNote is suitable for transcribing meetings, interviews, podcasts, and any mu
 
 - Python 3.8 or higher
 - CUDA-capable GPU (optional, for faster processing)
+- Groq API account (for cloud-based transcription)
+- Hugging Face account (for PyAnnote models)
 
 ### Step-by-step Installation
 
@@ -64,12 +66,17 @@ MeetNote is suitable for transcribing meetings, interviews, podcasts, and any mu
    - Create an access token at https://hf.co/settings/tokens
 
 6. Set up environment variables:
-   - Create a `.env` file in the project root
+- Create a `.env` file in the project root
    - Add the following lines:
      ```
      HUGGING_FACE_AUTH_TOKEN=your_huggingface_token
      GROQ_API_KEY=your_groq_api_key
      ```
+   - To obtain a Groq API key:
+     a. Go to [https://console.groq.com/](https://console.groq.com/) and sign up for an account
+     b. Once logged in, navigate to the API Keys section
+     c. Create a new API key and copy it
+     d. Paste the key as the value for `GROQ_API_KEY` in your `.env` file
 
 ### Package-specific Notes
 
@@ -102,6 +109,9 @@ MeetNote is suitable for transcribing meetings, interviews, podcasts, and any mu
   - `use_cuda`: Enable/disable GPU acceleration
   - `model_options`: Choose Whisper model size for local transcription
   - `diarization`: Adjust speaker detection parameters
+  - `transcription.method`: Set to "groq" to use Groq API or "local" for Whisper model
+
+Note: Ensure your Groq API key is correctly set in the `.env` file when using the Groq transcription method.
 
 ## Common Issues
 
