@@ -113,6 +113,29 @@ MeetNote is suitable for transcribing meetings, interviews, podcasts, and any mu
 
 Note: Ensure your Groq API key is correctly set in the `.env` file when using the Groq transcription method.
 
+## Verifying Your Setup
+
+After installation, you can verify that everything is set up correctly by running the test script from the project root directory:
+
+```
+python test_setup.py
+```
+
+This script will check:
+- Environment variables are set correctly
+- Config file can be loaded
+- GUI can be initialized
+- Audio processing libraries are working
+- Connection to Groq API is successful
+- Connection to HuggingFace is successful
+- Whisper model can be loaded
+
+If all tests pass, you should see checkmarks (✅) for each component. If any test fails, you'll see a cross (❌) with an error message. Address any issues before using the application.
+
+Note: Make sure you have an active internet connection when running the tests, as some checks require connecting to external services.
+
+**Future Updates:** In later versions of MeetNote, the location of this script may change to improve project organization. Always refer to the most recent documentation for the correct way to run setup verification.
+
 ## Common Issues
 
 1. **CUDA out of memory**: 
