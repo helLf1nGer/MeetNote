@@ -12,18 +12,26 @@ from utils.simple_combiner import combine as simple_combine
 from utils.weighted_combiner import combine as weighted_combine
 from utils.adaptive_combiner import combine as adaptive_combine
 from utils.adaptive_rule_combiner import combine as adaptive_rule_combine
+from utils.groq_llm_combiner import combine as groq_llm_combine
+from utils.two_stage_llm_combiner import combine as two_stage_llm_combine
+from utils.semantic_flow_combiner import combine as semantic_flow_combine
+from utils.local_llama_tiny_combiner import combine as local_llama_tiny_combine
 
 logger = logging.getLogger(__name__)
 
 def test_combiners(transcription, diarization, pipeline_model, output_directory):
     combiners = {
         # 'semantic': semantic_combine,
-        'semantic_enhanced': semantic_enhanced_combine,
+        # 'semantic_enhanced': semantic_enhanced_combine,
         # 'semantic_adaptive': semantic_adaptive_combine,
         # 'simple': simple_combine,
         # 'weighted': weighted_combine,
         # 'adaptive': adaptive_combine,
-        # 'adaptive_rule': adaptive_rule_combine
+        # 'adaptive_rule': adaptive_rule_combine,
+        'groq_llm': groq_llm_combine,
+        'two_stage_llm': two_stage_llm_combine,
+        # 'semantic_flow': semantic_flow_combine,
+        # 'local_llama_tiny': local_llama_tiny_combine
     }
 
     results = {}
