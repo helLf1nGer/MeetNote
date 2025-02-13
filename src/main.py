@@ -13,6 +13,7 @@ from utils.config_manager import ConfigManager
 from gui.main_window import create_gui
 
 from pyannote.audio import Pipeline
+from utils.transcription_tracker import TranscriptionTracker
 
 # Load environment variables
 load_dotenv()
@@ -48,14 +49,13 @@ def check_process_start(window, root):
 
 def process(window, root):
     try:
-        # Get user input through GUI
         user_input = window.get_process_result()
         if user_input is None:
-            logging.info("User cancelled the operation or closed the GUI without starting the process.")
             return
 
-        start_time = time.time()
         file_path = user_input['file_path']
+        processing_location = user_input['processing_location']  # will be "local" or "cloud"
+        start_time = time.time()
         num_speakers = user_input['num_speakers']
         pipeline_model = f"pyannote/{user_input['diarization_model']}"
         transcription_method = user_input['transcription_method']
@@ -70,10 +70,10 @@ def process(window, root):
         update_progress(window, 10)
         processed_file = process_file(file_path)
 
-        # Initialize pipeline
-        hugging_face_token = os.getenv('HUGGING_FACE_AUTH_TOKEN')
+        # Initialize pipeline, getting token from environment or config
+        hugging_face_token = os.getenv('HUGGING_FACE_AUTH_TOKEN') or config.get('hugging_face_auth_token')
         if not hugging_face_token:
-            raise ValueError("HUGGING_FACE_AUTH_TOKEN not found in environment variables")
+            raise ValueError("HUGGING_FACE_AUTH_TOKEN not found in environment variables or config.")
         pipeline = Pipeline.from_pretrained(pipeline_model, use_auth_token=hugging_face_token)
 
         update_progress(window, 20)
@@ -81,7 +81,7 @@ def process(window, root):
         with ThreadPoolExecutor(max_workers=2) as executor:
             if transcription_method == 'groq':
                 # Run diarization and Groq transcription concurrently
-                diarization_future = executor.submit(diarize_audio, pipeline, processed_file, num_speakers)
+                diarization_future = executor.submit(diarize_audio, pipeline, processed_file, num_speakers, processing_location)
                 transcription_future = executor.submit(transcribe_audio_with_groq, processed_file)
 
                 # Wait for both tasks to complete
@@ -92,7 +92,7 @@ def process(window, root):
                 print("Transcription was performed using Groq API.")
             else:
                 # For local transcription, keep the sequential process
-                diarization, diarization_device = diarize_audio(pipeline, processed_file, num_speakers)
+                diarization, diarization_device = diarize_audio(pipeline, processed_file, num_speakers, processing_location)
                 update_progress(window, 40)
                 model_whisper, whisper_device = create_local_model(config)
                 transcription = transcribe_audio(model_whisper, processed_file)
@@ -120,6 +120,14 @@ def process(window, root):
         # Print final confirmation, transcription text, and elapsed time
         print_results(final_transcription, output_pdf, start_time)
 
+        # After successful processing, mark the file as transcribed with output path
+        tracker = TranscriptionTracker()
+        tracker.mark_as_transcribed(file_path, output_pdf)
+        
+        # Update the file browser display
+        if hasattr(window, 'file_browser'):
+            window.file_browser.populate(os.path.dirname(file_path))
+
         # Close the GUI
         root.quit()
 
@@ -133,9 +141,9 @@ def print_results(final_transcription, output_pdf, start_time):
         print("\nTranscription Output:")
         for item in final_transcription:
             if 'start' in item and 'end' in item:
-                print(f"Speaker {item['speaker']} ({item['start']:.2f} - {item['end']:.2f}): {item['text']}")
+                print(f"{item['speaker']} ({item['start']:.2f} - {item['end']:.2f}): {item['text']}")
             else:
-                print(f"Speaker {item['speaker']}: {item['text']}")
+                print(f"{item['speaker']}: {item['text']}")
     logging.info(f"Script executed in {time.time() - start_time:.2f} seconds.")
 
 if __name__ == "__main__":

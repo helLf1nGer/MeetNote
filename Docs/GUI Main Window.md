@@ -88,3 +88,26 @@ The modular design of the GUI allows for easy additions of new features:
 - New themes can be easily added to the theme selection dropdown.
 
 This design ensures that the application can evolve with new requirements while maintaining a consistent and user-friendly interface.
+
+## File Tracking System
+
+The GUI includes a sophisticated file tracking system that:
+- Visually indicates which files have already been transcribed (green checkmark)
+- Maintains tracking even if files are renamed
+- Uses SHA-256 hashing to uniquely identify files
+- Persists tracking information across application restarts
+
+### Implementation Details
+
+1. Files are tracked in `data/transcribed_files.json`
+2. The CustomFileBrowser displays file status in a dedicated column
+3. Status updates occur automatically after successful transcription
+4. File identification uses content hashing rather than filenames
+
+### File Browser Columns
+- Name: File name
+- Date: Last modified date
+- Type: File extension
+- Size: File size in MB
+- Duration: Media duration
+- Status: Transcription status (✓ Transcribed / Not Transcribed)

@@ -6,7 +6,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 logger = logging.getLogger(__name__)
 
 class SemanticCombiner:
-    def __init__(self, model_name='paraphrase-MiniLM-L3-v2', similarity_threshold=0.7, gap_threshold=1.0):
+    def __init__(self, model_name='all-MiniLM-L6-v2', similarity_threshold=0.7, gap_threshold=1.0):
         self.model = SentenceTransformer(model_name)
         self.similarity_threshold = similarity_threshold
         self.gap_threshold = gap_threshold

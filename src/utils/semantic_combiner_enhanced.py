@@ -1,114 +1,109 @@
 import logging
 import numpy as np
+import re
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
-class ImprovedEnhancedSemanticCombiner:
-    def __init__(self, model_name='all-MiniLM-L6-v2', similarity_threshold=0.2, gap_threshold=0.1, short_utterance_threshold=1):
+class EnhancedSemanticCombiner:
+    def __init__(self, model_name='all-MiniLM-L6-v2', initial_similarity_threshold=0.7, initial_gap_threshold=1.0, short_utterance_threshold=5):
         self.model = SentenceTransformer(model_name)
-        self.similarity_threshold = similarity_threshold
-        self.gap_threshold = gap_threshold
+        self.similarity_threshold = initial_similarity_threshold
+        self.gap_threshold = initial_gap_threshold
         self.short_utterance_threshold = short_utterance_threshold
         self.speaker_mapping = {}
-        logger.info(f"Initialized ImprovedEnhancedSemanticCombiner with model: {model_name}")
 
     def semantic_similarity(self, text1, text2):
         embeddings = self.model.encode([text1, text2])
         return cosine_similarity([embeddings[0]], [embeddings[1]])[0][0]
 
-    def combine(self, transcription, diarization):
-        logger.info("Starting improved enhanced semantic combination process")
-        
-        combined_results = []
-        current_segment = None
-        previous_segment = None
-        
-        # Initialize speaker mapping
-        self.initialize_speaker_mapping(diarization)
+    def split_whisper_segment(self, segment):
+        sentences = re.split(r'(?<=[.!?])\s+', segment['text'])
+        sub_segments = []
+        total_length = len(segment['text'])
+        current_position = 0
 
-        for trans in transcription:
-            best_speaker = self.get_best_speaker(trans['start'], trans['end'], diarization)
-            
-            if not current_segment or self.should_start_new_segment(trans, current_segment, best_speaker):
-                if current_segment:
-                    self.finalize_segment(current_segment, combined_results)
-                
-                current_segment = self.create_new_segment(trans, best_speaker)
-            else:
-                if self.is_likely_response(trans, previous_segment):
-                    best_speaker = self.get_response_speaker(previous_segment['speaker'])
-                
-                if best_speaker == current_segment['speaker']:
-                    current_segment = self.extend_segment(current_segment, trans)
-                else:
-                    self.finalize_segment(current_segment, combined_results)
-                    current_segment = self.create_new_segment(trans, best_speaker)
-            
-            previous_segment = current_segment
+        for sentence in sentences:
+            sentence_length = len(sentence)
+            sub_segment_duration = (sentence_length / total_length) * (segment['end'] - segment['start'])
+            sub_segment = {
+                'text': sentence,
+                'start': segment['start'] + current_position * (segment['end'] - segment['start']) / total_length,
+                'end': segment['start'] + (current_position + sentence_length) * (segment['end'] - segment['start']) / total_length
+            }
+            sub_segments.append(sub_segment)
+            current_position += sentence_length
 
-        if current_segment:
-            self.finalize_segment(current_segment, combined_results)
+        return sub_segments
 
-        logger.info("Improved enhanced semantic combination completed")
-        return combined_results
+    def assign_speaker(self, sub_segment, diarization):
+        max_overlap = 0
+        best_speaker = 'Unknown'
+        for dia in diarization:
+            overlap = min(sub_segment['end'], dia['end']) - max(sub_segment['start'], dia['start'])
+            if overlap > max_overlap:
+                max_overlap = overlap
+                best_speaker = dia['speaker']
+        return self.speaker_mapping.get(best_speaker, 'Unknown')
 
     def initialize_speaker_mapping(self, diarization):
         speakers = sorted(set(d['speaker'] for d in diarization))
         self.speaker_mapping = {s: f"SPEAKER_{i:02d}" for i, s in enumerate(speakers)}
 
-    def get_best_speaker(self, start, end, diarization):
-        overlapping_segments = [d for d in diarization if d['start'] < end and d['end'] > start]
-        if not overlapping_segments:
-            return "Unknown"
-
-        best_speaker = max(overlapping_segments, key=lambda d: min(d['end'], end) - max(d['start'], start))
-        return self.speaker_mapping.get(best_speaker['speaker'], "Unknown")
-
-    def should_start_new_segment(self, trans, current_segment, best_speaker):
-        if not current_segment:
-            return True
-        if best_speaker != current_segment['speaker']:
-            return True
-        if trans['start'] - current_segment['end'] > self.gap_threshold:
-            return True
-        if self.semantic_similarity(current_segment['text'], trans['text']) < self.similarity_threshold:
-            return True
-        return False
-
-    def is_likely_response(self, trans, previous_segment):
+    def is_likely_response(self, sub_segment, previous_segment):
         if not previous_segment:
             return False
-        if trans['start'] - previous_segment['end'] > self.gap_threshold:
+        if sub_segment['start'] - previous_segment['end'] > self.gap_threshold:
             return False
-        if len(trans['text'].split()) <= self.short_utterance_threshold:
+        if len(sub_segment['text'].split()) <= self.short_utterance_threshold:
             return True
         return False
 
     def get_response_speaker(self, previous_speaker):
         speakers = list(self.speaker_mapping.values())
+        if previous_speaker == 'Unknown':
+            return 'Unknown'
         return speakers[(speakers.index(previous_speaker) + 1) % len(speakers)]
 
-    def create_new_segment(self, trans, speaker):
-        return {
-            'speaker': speaker,
-            'text': trans['text'],
-            'start': trans['start'],
-            'end': trans['end']
-        }
+    def combine(self, transcription, diarization):
+        logger.info("Starting updated improved enhanced semantic combination process")
+        self.initialize_speaker_mapping(diarization)
+        
+        combined_results = []
+        current_segment = None
+        previous_segment = None
 
-    def extend_segment(self, current_segment, trans):
-        return {
-            'speaker': current_segment['speaker'],
-            'text': f"{current_segment['text']} {trans['text']}",
-            'start': current_segment['start'],
-            'end': trans['end']
-        }
+        for trans in transcription:
+            sub_segments = self.split_whisper_segment(trans)
+            
+            for sub_segment in sub_segments:
+                sub_segment['speaker'] = self.assign_speaker(sub_segment, diarization)
+                
+                if self.is_likely_response(sub_segment, previous_segment):
+                    sub_segment['speaker'] = self.get_response_speaker(previous_segment['speaker'])
+                
+                if current_segment and current_segment['speaker'] == sub_segment['speaker']:
+                    time_gap = sub_segment['start'] - current_segment['end']
+                    if time_gap < self.gap_threshold:
+                        similarity = self.semantic_similarity(current_segment['text'], sub_segment['text'])
+                        if similarity > self.similarity_threshold:
+                            current_segment['end'] = sub_segment['end']
+                            current_segment['text'] += ' ' + sub_segment['text']
+                            continue
 
-    def finalize_segment(self, segment, combined_results):
-        combined_results.append(segment)
+                if current_segment:
+                    combined_results.append(current_segment)
+                
+                current_segment = sub_segment
+                previous_segment = current_segment
+
+        if current_segment:
+            combined_results.append(current_segment)
+
+        logger.info(f"Updated improved enhanced semantic combination completed. Total segments: {len(combined_results)}")
+        return combined_results
 
 def combine(transcription, diarization):
-    combiner = ImprovedEnhancedSemanticCombiner()
+    combiner = EnhancedSemanticCombiner()
     return combiner.combine(transcription, diarization)

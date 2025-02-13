@@ -23,11 +23,16 @@ Config/config.json
 # Don't ignore the template
 !config.template.json
 
+# Colab service files
+token.json
+credentials.json
+
 # Stable directory (development versions)
 Stable/
 
 # Tests
 tests/
+
 
 # IDE specific files
 .vscode/
