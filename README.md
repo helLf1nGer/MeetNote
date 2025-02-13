@@ -117,8 +117,27 @@ MeetNote is suitable for transcribing meetings, interviews, podcasts, and any mu
   - `model_options`: Choose Whisper model size for local transcription
   - `diarization`: Adjust speaker detection parameters
   - `transcription.method`: Set to "groq" to use Groq API or "local" for Whisper model
+  - `combiner`: Configure the combining strategy:
+    ```json
+    "combiner": {
+        "method": "semantic_flow",  // Default combiner method
+        "model": "llama3-groq-70b-8192-tool-use-preview"  // Used by LLM-based combiners
+    }
+    ```
+    Available combiner methods:
+    - semantic_flow (default): Best balance of accuracy and performance
+    - semantic: Basic semantic similarity-based combining
+    - semantic_adaptive: Dynamically adjusts thresholds
+    - semantic_enhanced: Finer-grained segment analysis
+    - simple: Basic time-based combining
+    - weighted: Enhanced time-based combining
+    - adaptive: Self-adjusting thresholds
+    - adaptive_rule: Rule-based adaptation
+    - groq_llm: Uses Groq API for LLM-based combining
+    - two_stage_llm: Combines semantic and LLM approaches
+    - local_llama_tiny: Uses local LLaMa model
 
-Note: Ensure your Groq API key is correctly set in the `.env` file when using the Groq transcription method.
+Note: Ensure your Groq API key is correctly set in the `.env` file when using the Groq transcription method or LLM-based combiners.
 
 ## Verifying Your Setup
 
@@ -170,14 +189,15 @@ We have an active development branch `dev-combiner-testing` that focuses on impr
 
 ### Key Features in dev-combiner-testing
 
-1. Multiple New Combiner Methods:
-   - Semantic Combiner
-   - Adaptive Semantic Combiner
-   - Enhanced Semantic Combiner
-   - Groq LLM Combiner
-   - Two-Stage LLM Combiner
-   - Local LLaMa Tiny Combiner
-   - Semantic Flow Combiner
+1. Multiple Combiner Methods:
+   - Semantic Flow Combiner (Default): Best balance of accuracy and performance
+   - Semantic Combiner: Basic semantic similarity approach
+   - Adaptive Semantic Combiner: Dynamic threshold adjustment
+   - Enhanced Semantic Combiner: Fine-grained segment analysis
+   - Groq LLM Combiner: Advanced language model processing
+   - Two-Stage LLM Combiner: Hybrid semantic-LLM approach
+   - Local LLaMa Tiny Combiner: Offline processing option
+   - And more...
 
 2. Development Tools:
    - `dev_main.py`: A development version of the main script for testing combiners
@@ -229,6 +249,8 @@ We welcome contributions to MeetNote! Please follow these steps:
 Please ensure your code adheres to our coding standards and include tests for new features.
 
 ## License
+
+### MIT License
 
 Copyright (c) 2024 Ivan Bondarenko
 
