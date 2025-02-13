@@ -14,6 +14,12 @@ test_venv/
 # Transcriptions output
 Transcriptions/
 
+# Data directory - contains user data and processing results
+data/
+
+# Diarization API - deployment specific
+diarization-api/
+
 # Node modules
 node_modules/
 
