@@ -130,6 +130,8 @@ class MainWindow:
         self.theme_var = ttk.StringVar(value=self.config.get('gui_theme', 'darkly'))
         self.output_directory = ttk.StringVar(value=self.config.get('output_directory', 'transcriptions'))
         self.processing_location = ttk.StringVar(value=self.config.get('processing_location', 'local'))
+        self.combiner_method = ttk.StringVar(value=self.config.get('combiner', {}).get('method', 'semantic_flow'))
+        self.combiner_method.trace_add('write', self.update_combiner_method)  # Add trace to update config
 
         self.process_started = False
         self.process_result = None
@@ -233,6 +235,22 @@ class MainWindow:
         ttk.Label(proc_frame, text='Transcription Method:', font=("TkDefaultFont", 10)).pack(fill=X, pady=(0, 5))
         transcription_methods = ['local', 'groq']
         ttk.Combobox(proc_frame, textvariable=self.transcription_method, values=transcription_methods, state="readonly").pack(fill=X, pady=(0, 10))
+        
+        # Combiner Method
+        ttk.Label(proc_frame, text='Combiner Method:', font=("TkDefaultFont", 10)).pack(fill=X, pady=(0, 5))
+        combiner_methods = [
+            'semantic_flow',      # Current default
+            'semantic',           # Basic semantic
+            'semantic_enhanced',  # Enhanced version
+            'semantic_adaptive',  # Adaptive version
+            'two_stage_llm',     # LLM-based
+            'groq_llm',          # Groq specific
+            'adaptive',          # Basic adaptive
+            'adaptive_rule',     # Rule-based adaptive
+            'weighted',          # Weighted combination
+            'simple'             # Simple combination
+        ]
+        ttk.Combobox(proc_frame, textvariable=self.combiner_method, values=combiner_methods, state="readonly").pack(fill=X, pady=(0, 10))
         
         # Processing Location
         ttk.Label(proc_frame, text='Diarization Method:', font=("TkDefaultFont", 10)).pack(fill=X, pady=(0, 5))
@@ -371,6 +389,13 @@ class MainWindow:
     def update_processing_location(self, *args):
         """Update config when processing location changes"""
         self.config['processing_location'] = self.processing_location.get()
+        config_manager.save_config()
+
+    def update_combiner_method(self, *args):
+        """Update the combiner method in the config when changed"""
+        current_combiner = self.config.get('combiner', {})
+        current_combiner['method'] = self.combiner_method.get()
+        self.config['combiner'] = current_combiner
         config_manager.save_config()
 
 def create_gui():
