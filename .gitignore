@@ -8,8 +8,16 @@ pycache_/
 venv/
 test_venv/
 
-# Environment variables
+# Environment variables and secrets
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials/
+secrets/
+*_key.json
+*_credentials.json
 
 # Transcriptions output
 Transcriptions/
@@ -39,7 +47,6 @@ Stable/
 # Tests
 tests/
 
-
 # IDE specific files
 .vscode/
 .idea/
@@ -56,8 +63,10 @@ dist/
 build/
 *.egg-info/
 
-# Logs
+# Logs and debugging
 *.log
+debug/
+logs/
 
 # Ignore .aidigestignore file
 .aidigestignore
