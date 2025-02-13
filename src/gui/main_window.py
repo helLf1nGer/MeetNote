@@ -9,6 +9,7 @@ import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 import cv2
 from utils.config_manager import ConfigManager
+from utils.transcription_tracker import TranscriptionTracker
 
 config_manager = ConfigManager()
 
@@ -17,12 +18,15 @@ class CustomFileBrowser(ttk.Treeview):
         super().__init__(parent, *args, **kwargs)
         self.parent = parent
         self.main_window = main_window
-        self["columns"] = ("Date", "Type", "Size", "Duration")
+        self.tracker = TranscriptionTracker()
+        self["columns"] = ("Date", "Type", "Size", "Duration", "Status", "Count")
         self.heading("#0", text="Name", anchor=tk.W, command=lambda: self.sort_column("#0", False))
         self.heading("Date", text="Date Modified", anchor=tk.W, command=lambda: self.sort_column("Date", False))
         self.heading("Type", text="Type", anchor=tk.W, command=lambda: self.sort_column("Type", False))
         self.heading("Size", text="Size", anchor=tk.W, command=lambda: self.sort_column("Size", False))
         self.heading("Duration", text="Duration", anchor=tk.W, command=lambda: self.sort_column("Duration", False))
+        self.heading("Status", text="Status", anchor=tk.W, command=lambda: self.sort_column("Status", False))
+        self.heading("Count", text="Times Transcribed", anchor=tk.W)
         
         self.file_path = None
         self.bind("<Double-1>", self.on_double_click)
@@ -35,26 +39,41 @@ class CustomFileBrowser(ttk.Treeview):
 
     def populate(self, path):
         self.delete(*self.get_children())
-        max_widths = {"#0": 20, "Date": 20, "Type": 10, "Size": 15, "Duration": 15}
+        max_widths = {"#0": 20, "Date": 20, "Type": 10, "Size": 15, "Duration": 15, "Status": 15, "Count": 15}
         
-        for item in os.listdir(path):
-            full_path = os.path.join(path, item)
-            if os.path.isfile(full_path):
-                file_type = os.path.splitext(item)[1]
-                if file_type.lower() in ['.mp3', '.wav', '.m4a', '.mp4', '.avi', '.mov', '.mkv', '.flv']:
-                    stats = os.stat(full_path)
-                    size = f"{stats.st_size / (1024 * 1024):.2f} MB"
-                    date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stats.st_mtime))
-                    duration = self.get_duration(full_path)
-                    values = (date, file_type, size, duration)
-                    self.insert("", tk.END, text=item, values=values)
-                    
-                    max_widths["#0"] = min(max(max_widths["#0"], len(item)), 40)
-                    for i, col in enumerate(self["columns"]):
-                        max_widths[col] = min(max(max_widths[col], len(str(values[i]))), 30)
+        def process_files():
+            files_data = []
+            for item in os.listdir(path):
+                full_path = os.path.join(path, item)
+                if os.path.isfile(full_path):
+                    file_type = os.path.splitext(item)[1]
+                    if file_type.lower() in ['.mp3', '.wav', '.m4a', '.mp4', '.avi', '.mov', '.mkv', '.flv']:
+                        stats = os.stat(full_path)
+                        size = f"{stats.st_size / (1024 * 1024):.2f} MB"
+                        date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stats.st_mtime))
+                        duration = self.get_duration(full_path)
+                        history = self.tracker.get_transcription_history(full_path)
+                        count = len(history)
+                        status = f"✓ Transcribed ({count}x)" if count > 0 else "Not Transcribed"
+                        files_data.append((item, date, file_type, size, duration, status, count, bool(count)))
+            return files_data
+        
+        files_data = process_files()
+        
+        for item, date, file_type, size, duration, status, count, _ in files_data:
+            values = (date, file_type, size, duration, status, count)
+            
+            tags = ('transcribed',) if self.tracker.is_transcribed(os.path.join(path, item)) else ()
+            self.insert("", tk.END, text=item, values=values, tags=tags)
+            
+            max_widths["#0"] = min(max(max_widths["#0"], len(item)), 40)
+            for i, col in enumerate(self["columns"]):
+                max_widths[col] = min(max(max_widths[col], len(str(values[i]))), 30)
 
         for col in ("#0",) + self["columns"]:
             self.column(col, width=max_widths[col]*7)
+
+        self.tag_configure('transcribed', foreground='green')
 
     def get_duration(self, file_path):
         try:
@@ -96,104 +115,152 @@ class CustomFileBrowser(ttk.Treeview):
 class MainWindow:
     def __init__(self, root):
         self.root = root
-        self.root.title('Audio Transcription and Diarization')
+        self.root.title('Audio Transcription & Diarization')
         
-        # Set the icon for the main window and taskbar
+        # Set the icon and configure the window
         icon_path = os.path.join(os.path.dirname(__file__), '../../Icon/MeetNote.ico')
         self.root.iconbitmap(icon_path)
+        self.root.minsize(800, 600)  # Set minimum window size
         
         self.config = config_manager.config
         self.file_path = ttk.StringVar()
         self.num_speakers = ttk.IntVar(value=2)
-        self.diarization_model = ttk.StringVar(value='speaker-diarization-3.0')
+        self.diarization_model = ttk.StringVar(value='speaker-diarization-3.1')
         self.transcription_method = ttk.StringVar(value='groq')
         self.theme_var = ttk.StringVar(value=self.config.get('gui_theme', 'darkly'))
         self.output_directory = ttk.StringVar(value=self.config.get('output_directory', 'transcriptions'))
+        self.processing_location = ttk.StringVar(value=self.config.get('processing_location', 'local'))
 
         self.process_started = False
         self.process_result = None
         self.create_widgets()
-        self.hide_progress_bar()  # Hide progress bar initially
+        self.hide_progress_bar()
 
     def create_widgets(self):
-        main_frame = ttk.Frame(self.root, padding="20 10 20 10")
+        # Create main container with padding
+        main_frame = ttk.Frame(self.root, padding="20")
         main_frame.pack(fill=BOTH, expand=YES)
 
-        # Top frame for file browsing
-        top_frame = ttk.Frame(main_frame)
-        top_frame.pack(fill=X, pady=10)
+        # Top frame with modern header and theme selector
+        header_frame = ttk.Frame(main_frame)
+        header_frame.pack(fill=X, pady=(0, 20))
+        
+        # Left side: Title
+        header_label = ttk.Label(header_frame, text="Audio Processing Center", font=("TkDefaultFont", 16, "bold"))
+        header_label.pack(side=LEFT)
 
-        browse_button = ttk.Button(top_frame, text='Browse Directory', command=self.browse_directory, style='primary.TButton')
-        browse_button.pack(side=LEFT, padx=(0, 10))
+        # Right side: Theme selector with modern styling
+        theme_frame = ttk.Frame(header_frame)
+        theme_frame.pack(side=RIGHT)
+        ttk.Label(theme_frame, text='Theme:', font=("TkDefaultFont", 10)).pack(side=LEFT, padx=(0, 5))
+        themes = ['darkly', 'superhero', 'solar', 'cyborg', 'vapor', 'litera']
+        theme_menu = ttk.Combobox(theme_frame, textvariable=self.theme_var, values=themes, state="readonly", width=12, bootstyle="primary")
+        theme_menu.pack(side=LEFT, padx=(0, 5))
+        ttk.Button(theme_frame, text="🎨", command=self.change_theme, style='primary-outline.TButton', width=3).pack(side=LEFT)
 
-        select_button = ttk.Button(top_frame, text='Select File', command=self.select_file, style='info.TButton')
-        select_button.pack(side=LEFT)
+        # Main content frame with two columns
+        content_frame = ttk.Frame(main_frame)
+        content_frame.pack(fill=BOTH, expand=YES)
+        content_frame.columnconfigure(0, weight=3)  # File list gets more space
+        content_frame.columnconfigure(1, weight=1)  # Settings get less space
 
-        # File browser
-        self.file_browser = CustomFileBrowser(main_frame, self)
-        self.file_browser.pack(expand=YES, fill=BOTH, padx=10, pady=10)
+        # Left column: File browsing and list
+        file_frame = ttk.Frame(content_frame)
+        file_frame.grid(row=0, column=0, sticky=NSEW, padx=(0, 10))
+        file_frame.rowconfigure(1, weight=1)  # Make file list expandable
+        file_frame.columnconfigure(0, weight=1)
 
-        # File info frame
-        info_frame = ttk.Frame(main_frame)
-        info_frame.pack(fill=X, pady=10)
+        # Browse button with icon
+        browse_button = ttk.Button(file_frame, text='📂 Browse Directory', command=self.browse_directory, style='primary.TButton', width=20)
+        browse_button.grid(row=0, column=0, sticky=W, pady=(0, 10))
 
-        self.file_label = ttk.Label(info_frame, text="No file selected", font=("TkDefaultFont", 12, "bold"))
-        self.file_label.pack(side=LEFT)
+        # File browser with modern styling
+        browser_frame = ttk.LabelFrame(file_frame, text="Media Files", padding="10", bootstyle="primary")
+        browser_frame.grid(row=1, column=0, sticky=NSEW)
+        
+        self.file_browser = CustomFileBrowser(browser_frame, self)
+        self.file_browser.pack(expand=YES, fill=BOTH)
 
-        self.file_info = ttk.Label(info_frame, text="")
-        self.file_info.pack(side=LEFT, padx=(10, 0))
+        # File info below browser
+        self.file_label = ttk.Label(file_frame, text="No file selected", font=("TkDefaultFont", 12, "bold"))
+        self.file_label.grid(row=2, column=0, sticky=W, pady=(10, 0))
+        self.file_info = ttk.Label(file_frame, text="")
+        self.file_info.grid(row=3, column=0, sticky=W)
 
-        # Settings frame
-        settings_frame = ttk.LabelFrame(main_frame, text="Settings", padding="10 5 10 5")
-        settings_frame.pack(fill=X, pady=10)
+        # Right column: Settings
+        settings_frame = ttk.Frame(content_frame)
+        settings_frame.grid(row=0, column=1, sticky=NSEW)
 
-        # Number of speakers
-        ttk.Label(settings_frame, text='Number of Speakers:').grid(row=0, column=0, sticky=W, padx=(0, 10))
-        ttk.Spinbox(settings_frame, from_=1, to=10, textvariable=self.num_speakers, width=5).grid(row=0, column=1, sticky=W, padx=(0, 20))
+        # Output Settings at the top
+        output_frame = ttk.LabelFrame(settings_frame, text="Output Settings", padding="10", bootstyle="primary")
+        output_frame.pack(fill=X, pady=(0, 10))
+        
+        ttk.Label(output_frame, text='Output Directory:', font=("TkDefaultFont", 10)).pack(fill=X, pady=(0, 5))
+        dir_frame = ttk.Frame(output_frame)
+        dir_frame.pack(fill=X)
+        ttk.Entry(dir_frame, textvariable=self.output_directory).pack(side=LEFT, fill=X, expand=YES, padx=(0, 5))
+        ttk.Button(dir_frame, text="📁", command=self.browse_output_directory, style='primary-outline.TButton', width=3).pack(side=RIGHT)
 
-        # Diarization model dropdown
-        ttk.Label(settings_frame, text='Diarization Model:').grid(row=0, column=2, sticky=W, padx=(0, 10))
+        # Diarization Settings with collapsible advanced options
+        diar_frame = ttk.LabelFrame(settings_frame, text="Diarization Settings", padding="10", bootstyle="primary")
+        diar_frame.pack(fill=X, pady=(0, 10))
+        
+        # Basic diarization settings
+        speaker_frame = ttk.Frame(diar_frame)
+        speaker_frame.pack(fill=X, pady=(0, 5))
+        ttk.Label(speaker_frame, text='Number of Speakers:', font=("TkDefaultFont", 10)).pack(side=LEFT)
+        ttk.Spinbox(speaker_frame, from_=1, to=10, textvariable=self.num_speakers, width=5).pack(side=LEFT, padx=(5, 0))
+        
+        # Advanced diarization settings in a collapsible frame
+        advanced_frame = ttk.Labelframe(diar_frame, text="Advanced Options", padding="5", bootstyle="secondary")
+        advanced_frame.pack(fill=X, pady=(5, 0))
+        
+        ttk.Label(advanced_frame, text='Diarization Model:', font=("TkDefaultFont", 10)).pack(fill=X, pady=(0, 5))
         diarization_models = [
+            'speaker-diarization-3.1',  # Default/recommended first
             'speaker-diarization-3.0',
-            'speaker-diarization-3.1',
             'speech-separation-ami-1.0',
             'segmentation',
             'wespeaker-voxceleb-resnet34-LM'
         ]
-        ttk.Combobox(settings_frame, textvariable=self.diarization_model, values=diarization_models, state="readonly", width=30).grid(row=0, column=3, sticky=W, padx=(0, 20))
+        ttk.Combobox(advanced_frame, textvariable=self.diarization_model, values=diarization_models, state="readonly").pack(fill=X)
 
-        # Transcription method dropdown
-        ttk.Label(settings_frame, text='Transcription Method:').grid(row=1, column=0, sticky=W, padx=(0, 10), pady=(10, 0))
-        transcription_methods = ['groq', 'local']
-        ttk.Combobox(settings_frame, textvariable=self.transcription_method, values=transcription_methods, state="readonly", width=10).grid(row=1, column=1, sticky=W, padx=(0, 20), pady=(10, 0))
-
-        # Theme selection
-        ttk.Label(settings_frame, text='GUI Theme:').grid(row=1, column=2, sticky=W, padx=(0, 10), pady=(10, 0))
-        themes = ['darkly', 'superhero', 'solar', 'cyborg', 'vapor', 'litera']
-        theme_menu = ttk.Combobox(settings_frame, textvariable=self.theme_var, values=themes, state="readonly", width=15)
-        theme_menu.grid(row=1, column=3, sticky=W, padx=(0, 10), pady=(10, 0))
-        ttk.Button(settings_frame, text="Apply Theme", command=self.change_theme, style='secondary.TButton').grid(row=1, column=4, sticky=W, pady=(10, 0))
+        # Processing Settings
+        proc_frame = ttk.LabelFrame(settings_frame, text="Processing Settings", padding="10", bootstyle="primary")
+        proc_frame.pack(fill=X)
         
-        ttk.Label(settings_frame, text='Output Directory:').grid(row=2, column=0, sticky=W, padx=(0, 10), pady=(10, 0))
-        ttk.Entry(settings_frame, textvariable=self.output_directory, width=30).grid(row=2, column=1, columnspan=2, sticky=W+E, padx=(0, 10), pady=(10, 0))
-        ttk.Button(settings_frame, text="Browse", command=self.browse_output_directory, style='secondary.TButton').grid(row=2, column=3, sticky=W, pady=(10, 0))
+        # Transcription Method
+        ttk.Label(proc_frame, text='Transcription Method:', font=("TkDefaultFont", 10)).pack(fill=X, pady=(0, 5))
+        transcription_methods = ['local', 'groq']
+        ttk.Combobox(proc_frame, textvariable=self.transcription_method, values=transcription_methods, state="readonly").pack(fill=X, pady=(0, 10))
+        
+        # Processing Location
+        ttk.Label(proc_frame, text='Diarization Method:', font=("TkDefaultFont", 10)).pack(fill=X, pady=(0, 5))
+        processing_locations = ['local', 'cloud']
+        ttk.Combobox(proc_frame, textvariable=self.processing_location, values=processing_locations, state="readonly").pack(fill=X)
 
-        # Progress bar
-        self.progress_frame = ttk.Frame(main_frame)
-        self.progress_frame.pack(fill=X, pady=10)
-        self.progress_bar = ttk.Progressbar(self.progress_frame, length=300, mode='determinate')
+        # Progress bar (hidden initially)
+        self.progress_frame = ttk.Frame(settings_frame)
+        self.progress_frame.pack(fill=X, pady=(10, 0))
+        
+        self.progress_bar = ttk.Progressbar(self.progress_frame, mode='determinate', bootstyle="success-striped")
         self.progress_bar.pack(fill=X, expand=YES, padx=(0, 10))
-        self.progress_label = ttk.Label(self.progress_frame, text="0%")
+        
+        self.progress_label = ttk.Label(self.progress_frame, text="0%", font=("TkDefaultFont", 10))
         self.progress_label.pack(side=RIGHT)
 
-        # Start button
-        self.start_button = ttk.Button(main_frame, text='Start Processing', command=self.start_process, style='success.TButton')
-        self.start_button.pack(pady=10)
+        # Start button with modern styling
+        self.start_button = ttk.Button(settings_frame, text='▶ Start Processing', command=self.start_process, style='success.TButton', width=20)
+        self.start_button.pack(pady=(10, 0), fill=X)
+
+        # Status bar
+        status_frame = ttk.Frame(main_frame)
+        status_frame.pack(fill=X, side=BOTTOM, pady=(10, 0))
+        ttk.Separator(status_frame).pack(fill=X, pady=(0, 5))
+        ttk.Label(status_frame, text="Ready", font=("TkDefaultFont", 9), bootstyle="secondary").pack(side=LEFT)
 
         # Initial population of the file browser
         self.populate_file_browser()
-        
-    
 
     def browse_directory(self):
         directory = filedialog.askdirectory(initialdir=self.config.get("last_directory"))
@@ -246,7 +313,8 @@ class MainWindow:
             'num_speakers': self.num_speakers.get(),
             'diarization_model': self.diarization_model.get(),
             'transcription_method': self.transcription_method.get(),
-            'output_directory': self.output_directory.get()
+            'output_directory': self.output_directory.get(),
+            'processing_location': self.processing_location.get()
         }
         self.start_button.config(state='disabled')
 
@@ -299,6 +367,11 @@ class MainWindow:
         if self.process_started:
             return self.process_result
         return None
+
+    def update_processing_location(self, *args):
+        """Update config when processing location changes"""
+        self.config['processing_location'] = self.processing_location.get()
+        config_manager.save_config()
 
 def create_gui():
     """Create and return the main window and root objects."""

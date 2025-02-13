@@ -162,3 +162,24 @@ This ensures that any errors are properly logged and reported, aiding in debuggi
 ## Conclusion
 
 The main script is the backbone of the application, tying together all components into a cohesive and efficient process. Its design allows for flexibility in processing methods while optimizing resource usage, making it adaptable to various user needs and system capabilities.
+
+## Process Flow
+
+1. **File Selection and Status Check**
+   - User selects file through GUI
+   - System checks if file was previously transcribed
+   - GUI displays transcription status
+
+2. **Processing**
+   - Transcription and diarization occur
+   - Progress updates shown in GUI
+
+3. **Post-Processing**
+   - Results saved to output directory
+   - File marked as transcribed in tracking system
+   - GUI updated to reflect new status
+
+4. **File Tracking**
+   - Transcribed files tracked using content hashing
+   - Status persists across sessions
+   - Tracking resistant to file renaming

@@ -28,7 +28,7 @@ def test_combiners(transcription, diarization, pipeline_model, output_directory)
         # 'weighted': weighted_combine,
         # 'adaptive': adaptive_combine,
         # 'adaptive_rule': adaptive_rule_combine,
-        'groq_llm': groq_llm_combine,
+        # 'groq_llm': groq_llm_combine,
         'two_stage_llm': two_stage_llm_combine,
         # 'semantic_flow': semantic_flow_combine,
         # 'local_llama_tiny': local_llama_tiny_combine

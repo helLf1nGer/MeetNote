@@ -11,6 +11,12 @@ Key features:
 - User-friendly GUI for easy operation
 - Support for various audio and video formats
 - Customizable output in PDF format
+- Audio and video file transcription using Groq API or local Whisper model
+- Speaker diarization using pyannote.audio
+- File tracking system to identify previously transcribed files
+- Visual indicators for transcribed files in the GUI
+- Persistent tracking across sessions using file hashing
+- Support for file renaming while maintaining transcription status
 
 MeetNote is suitable for transcribing meetings, interviews, podcasts, and any multi-speaker audio content.
 
@@ -20,8 +26,9 @@ MeetNote is suitable for transcribing meetings, interviews, podcasts, and any mu
 2. [Usage](#usage)
 3. [Configuration](#configuration)
 4. [Common Issues](#common-issues)
-5. [Contributing](#contributing)
-6. [License](#license)
+5. [Development Branch: Combiner Testing](#development-branch-combiner-testing)
+6. [Contributing](#contributing)
+7. [License](#license)
 
 ## Installation
 
@@ -156,6 +163,58 @@ Note: Make sure you have an active internet connection when running the tests, a
 5. **PDF generation fails**:
    - Ensure you have write permissions in the output directory
    - Check if a custom font is properly installed in the `Fonts` directory
+
+## Development Branch: Combiner Testing
+
+We have an active development branch `dev-combiner-testing` that focuses on improving and expanding our combiner methods. This branch includes experimental features and tools for testing various combining strategies.
+
+### Key Features in dev-combiner-testing
+
+1. Multiple New Combiner Methods:
+   - Semantic Combiner
+   - Adaptive Semantic Combiner
+   - Enhanced Semantic Combiner
+   - Groq LLM Combiner
+   - Two-Stage LLM Combiner
+   - Local LLaMa Tiny Combiner
+   - Semantic Flow Combiner
+
+2. Development Tools:
+   - `dev_main.py`: A development version of the main script for testing combiners
+   - `combiner_testing.py`: Utility for testing and comparing different combiner methods
+   - Rate limiter for API calls
+
+3. New Integrations:
+   - Groq API support for advanced language model processing
+   - Local LLaMa model support for offline processing capabilities
+   - Sentence transformers for improved semantic analysis
+
+4. Enhanced Configuration and GUI:
+   - More flexible configuration options for different combiner methods
+   - Development GUI for easier testing and comparison of combiners
+
+### Accessing the Development Branch
+
+To explore or contribute to these new features:
+
+1. Clone the repository (if you haven't already):
+   ```
+   git clone https://github.com/helLf1nGer/meetnote.git
+   ```
+
+2. Switch to the development branch:
+   ```
+   git checkout dev-combiner-testing
+   ```
+
+3. Install additional dependencies:
+   ```
+   pip install groq sentence-transformers
+   ```
+
+4. Refer to the updated documentation in the `Docs/` directory for detailed information on new features and usage.
+
+Note: Features in the development branch are experimental and may not be stable. Use with caution in production environments.
 
 ## Contributing
 
