@@ -27,6 +27,10 @@
         "font_size": 12,
         "line_spacing": 1.2
     },
+    "combiner": {
+        "method": "semantic_flow",
+        "model": "llama3-groq-70b-8192-tool-use-preview"
+    },
     "last_directory": "PATH_TO_YOUR_LAST_DIRECTORY",
     "gui_theme": "cyborg"
 }

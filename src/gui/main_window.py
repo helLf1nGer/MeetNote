@@ -393,10 +393,11 @@ class MainWindow:
 
     def update_combiner_method(self, *args):
         """Update the combiner method in the config when changed"""
-        current_combiner = self.config.get('combiner', {})
-        current_combiner['method'] = self.combiner_method.get()
-        self.config['combiner'] = current_combiner
+        if 'combiner' not in self.config:
+            self.config['combiner'] = {}
+        self.config['combiner']['method'] = self.combiner_method.get()
         config_manager.save_config()
+        print(f"Updated combiner method to: {self.combiner_method.get()}")  # Debug print
 
 def create_gui():
     """Create and return the main window and root objects."""

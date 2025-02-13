@@ -10,7 +10,7 @@ The utils package contains various combiner modules that are responsible for mer
 
 **Default Combiner**
 
-The Semantic Flow Combiner focuses on the semantic flow of the conversation to determine speaker changes and segment boundaries.
+The Semantic Flow Combiner focuses on the semantic flow of the conversation to determine speaker changes and segment boundaries. This is the default combiner as it provides the best balance of accuracy and performance.
 
 Key features:
 - Analyzes semantic continuity across segments using sentence embeddings
@@ -212,7 +212,18 @@ Key features:
 
 ## Default Configuration
 
-By default, the application uses the Semantic Combiner (semantic_combiner.py). This choice balances effectiveness and reliability. While adaptive combiners (adaptive_combiner.py and adaptive_rule_combiner.py) show potential for improved performance, they are currently experimental and may have unresolved issues.
+The application now uses the Semantic Flow Combiner (semantic_flow_combiner.py) by default. This choice provides the best balance of accuracy, reliability, and performance. The combiner configuration is stored in the config.json file under the "combiner" section:
+
+```json
+{
+    "combiner": {
+        "method": "semantic_flow",
+        "model": "llama3-groq-70b-8192-tool-use-preview"
+    }
+}
+```
+
+The model parameter is only used for LLM-based combiners (two_stage_llm and groq_llm).
 
 ## Usage
 
@@ -221,11 +232,10 @@ The result combiner is typically used in the main application flow:
 ```python
 from utils.result_combiner import combine_transcription_diarization
 
-final_transcription = combine_transcription_diarization(transcription, diarization, pipeline_model, method='semantic')
+final_transcription = combine_transcription_diarization(transcription, diarization, pipeline_model)
 ```
 
-
-You can change the `method` parameter to use different combiners:
+You can change the combiner method in the config.json file or through the GUI. Available methods:
 - 'semantic_flow' (default)
 - 'semantic'
 - 'semantic_adaptive'
