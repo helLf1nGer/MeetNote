@@ -19,6 +19,10 @@ class TwoStageLLMCombiner:
         # Stage 1: Apply Semantic Flow
         semantic_flow_output = self.semantic_flow.combine(transcription, diarization)
         logger.info(f"Semantic Flow produced {len(semantic_flow_output)} segments")
+        
+        if not semantic_flow_output:
+            logger.warning("Semantic Flow produced an empty result, skipping Groq LLM stage.")
+            return []
 
         # Stage 2: Use Groq LLM Combiner for final speaker assignment
         final_output = self.groq_combiner.combine(semantic_flow_output)

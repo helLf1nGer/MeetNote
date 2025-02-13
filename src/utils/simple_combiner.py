@@ -2,9 +2,13 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def segment_score(transcript_segment, diarization_segment):
+def segment_score(transcript_segment: dict, diarization_segment: dict) -> float:
+    duration = transcript_segment['end'] - transcript_segment['start']
+    if duration <= 0:
+        return 0.0
+
     overlap = min(transcript_segment['end'], diarization_segment['end']) - max(transcript_segment['start'], diarization_segment['start'])
-    overlap_ratio = overlap / (transcript_segment['end'] - transcript_segment['start'])
+    overlap_ratio = overlap / duration
     return overlap_ratio
 
 def combine(transcription, diarization):

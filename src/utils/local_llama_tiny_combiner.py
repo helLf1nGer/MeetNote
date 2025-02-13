@@ -33,7 +33,7 @@ class LocalLlamaTinyCombiner:
             if len(segment_speakers) > 1:
                 problematic_chunks.append({
                     **segment,
-                    'possible_speakers': list(segment_speakers),
+                    'possible_speakers': sorted(list(segment_speakers)),
                     'index': i
                 })
         return problematic_chunks

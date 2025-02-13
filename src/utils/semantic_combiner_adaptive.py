@@ -6,18 +6,24 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 class AdaptiveSemanticCombiner:
-    def __init__(self, model_name='paraphrase-MiniLM-L3-v2', initial_similarity_threshold=0.7, initial_gap_threshold=1.0):
+    def __init__(self, model_name: str = 'paraphrase-MiniLM-L3-v2',
+                 initial_similarity_threshold: float = 0.7, initial_gap_threshold: float = 1.0):
         self.model = SentenceTransformer(model_name)
         self.similarity_threshold = initial_similarity_threshold
         self.gap_threshold = initial_gap_threshold
+        self._embedding_cache = {}
         logger.info(f"Initialized AdaptiveSemanticCombiner with model: {model_name}")
         logger.info(f"Initial thresholds - Similarity: {self.similarity_threshold:.2f}, Gap: {self.gap_threshold:.2f}")
 
+    def get_embedding(self, text: str) -> "np.ndarray":
+        if text not in self._embedding_cache:
+            self._embedding_cache[text] = self.model.encode(text)
+        return self._embedding_cache[text]
+
     def semantic_similarity(self, text1: str, text2: str) -> float:
-        embeddings = self.model.encode([text1, text2])
-        similarity = cosine_similarity([embeddings[0]], [embeddings[1]])[0][0]
-        logger.debug(f"Semantic similarity between segments: {similarity:.4f}")
-        return similarity
+        emb1 = self.get_embedding(text1)
+        emb2 = self.get_embedding(text2)
+        return cosine_similarity([emb1], [emb2])[0][0]
 
     def analyze_transcript(self, transcription):
         logger.info("Analyzing transcript for initial threshold setting")

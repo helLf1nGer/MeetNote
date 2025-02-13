@@ -18,14 +18,21 @@ class EnhancedSemanticCombiner:
         embeddings = self.model.encode([text1, text2])
         return cosine_similarity([embeddings[0]], [embeddings[1]])[0][0]
 
-    def split_whisper_segment(self, segment):
-        sentences = re.split(r'(?<=[.!?])\s+', segment['text'])
+    def split_whisper_segment(self, segment: dict) -> list:
+        text = segment.get('text', '')
+        if not text:
+            return []
+
+        sentences = re.split(r'(?<=[.!?])\s+', text)
         sub_segments = []
-        total_length = len(segment['text'])
+        total_length = len(text)
         current_position = 0
 
         for sentence in sentences:
             sentence_length = len(sentence)
+            # Avoid division by zero in case total_length is 0 (should not happen due to prior check)
+            if total_length == 0:
+                continue
             sub_segment_duration = (sentence_length / total_length) * (segment['end'] - segment['start'])
             sub_segment = {
                 'text': sentence,

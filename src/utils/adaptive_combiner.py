@@ -8,7 +8,7 @@ class AdaptiveCombiner:
         self.overlap_threshold = initial_overlap_threshold
         self.gap_threshold = initial_gap_threshold
 
-    def segment_score(self, transcript_segment, diarization_segment):
+    def segment_score(self, transcript_segment: dict, diarization_segment: dict) -> float:
         overlap_start = max(transcript_segment['start'], diarization_segment['start'])
         overlap_end = min(transcript_segment['end'], diarization_segment['end'])
         overlap = max(0, overlap_end - overlap_start)
@@ -16,6 +16,10 @@ class AdaptiveCombiner:
         transcript_duration = transcript_segment['end'] - transcript_segment['start']
         diarization_duration = diarization_segment['end'] - diarization_segment['start']
         
+        # Guard against zero or negative durations
+        if transcript_duration <= 0 or diarization_duration <= 0:
+            return 0.0
+
         overlap_ratio = overlap / transcript_duration
         coverage_ratio = overlap / diarization_duration
         

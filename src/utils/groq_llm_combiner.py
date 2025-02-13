@@ -2,6 +2,7 @@ import logging
 from typing import List, Dict
 from .groq_api_helper import groq_api_call, count_tokens
 from .rate_limiter import RateLimiter
+import ast
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -93,7 +94,7 @@ class GroqLLMCombiner:
 
     def _parse_response(self, response: str, chunk: List[Dict]) -> List[Dict]:
         try:
-            parsed_response = eval(response)  # Using eval as the response is already in Python list format
+            parsed_response = ast.literal_eval(response)
             if not isinstance(parsed_response, list):
                 raise ValueError("Response is not a list")
             

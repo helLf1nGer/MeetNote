@@ -6,10 +6,16 @@ from sklearn.metrics.pairwise import cosine_similarity
 logger = logging.getLogger(__name__)
 
 class SemanticCombiner:
-    def __init__(self, model_name='all-MiniLM-L6-v2', similarity_threshold=0.7, gap_threshold=1.0):
+    def __init__(self, model_name: str = 'all-MiniLM-L6-v2', similarity_threshold: float = 0.7, gap_threshold: float = 1.0):
         self.model = SentenceTransformer(model_name)
         self.similarity_threshold = similarity_threshold
         self.gap_threshold = gap_threshold
+        self._embedding_cache = {}
+
+    def get_embedding(self, text: str) -> "np.ndarray":
+        if text not in self._embedding_cache:
+            self._embedding_cache[text] = self.model.encode(text)
+        return self._embedding_cache[text]
 
     def segment_score(self, transcript_segment, diarization_segment):
         overlap_start = max(transcript_segment['start'], diarization_segment['start'])
@@ -24,9 +30,10 @@ class SemanticCombiner:
         
         return (overlap_ratio + coverage_ratio) / 2
 
-    def semantic_similarity(self, text1, text2):
-        embeddings = self.model.encode([text1, text2])
-        return cosine_similarity([embeddings[0]], [embeddings[1]])[0][0]
+    def semantic_similarity(self, text1: str, text2: str) -> float:
+        emb1 = self.get_embedding(text1)
+        emb2 = self.get_embedding(text2)
+        return cosine_similarity([emb1], [emb2])[0][0]
 
     def combine(self, transcription, diarization):
         combined_results = []

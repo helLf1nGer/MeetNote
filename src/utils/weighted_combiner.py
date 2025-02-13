@@ -2,7 +2,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def segment_score(transcript_segment, diarization_segment, weights=None):
+def segment_score(transcript_segment: dict, diarization_segment: dict, weights: dict = None) -> float:
     if weights is None:
         weights = {
             'overlap': 0.5,
@@ -10,15 +10,14 @@ def segment_score(transcript_segment, diarization_segment, weights=None):
             'center_distance': 0.2
         }
 
+    transcript_duration = transcript_segment['end'] - transcript_segment['start']
+    diarization_duration = diarization_segment['end'] - diarization_segment['start']
+    if transcript_duration <= 0 or diarization_duration <= 0:
+        return 0.0
+
     overlap_start = max(transcript_segment['start'], diarization_segment['start'])
     overlap_end = min(transcript_segment['end'], diarization_segment['end'])
     overlap_duration = max(0, overlap_end - overlap_start)
-
-    if overlap_duration == 0:
-        return 0
-
-    transcript_duration = transcript_segment['end'] - transcript_segment['start']
-    diarization_duration = diarization_segment['end'] - diarization_segment['start']
 
     overlap_ratio = overlap_duration / transcript_duration
     coverage_ratio = overlap_duration / diarization_duration
@@ -33,7 +32,7 @@ def segment_score(transcript_segment, diarization_segment, weights=None):
              weights['coverage'] * coverage_ratio -
              weights['center_distance'] * normalized_distance)
 
-    return max(score, 0)
+    return max(score, 0.0)
 
 def combine(transcription, diarization):
     combined_results = []
