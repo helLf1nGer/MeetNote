@@ -1,210 +1,508 @@
-import tkinter as tk
-from tkinter import filedialog
+"""
+Main Window Module for Audio Transcription & Diarization Application.
+
+This module provides the GUI interface for the application, allowing users to:
+- Browse and select audio/video files
+- Configure transcription and diarization settings
+- Process media files and view results
+"""
+
 import os
-import time
 import sys
-import subprocess
-from mutagen import File as MutagenFile
+import time
+import logging
+import threading
+import queue
+from typing import Dict, List, Tuple, Optional, Any, Union, Callable
+
+import tkinter as tk
+from tkinter import filedialog, messagebox
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
+from ttkbootstrap.dialogs import Messagebox
+
 import cv2
+from mutagen import File as MutagenFile
+
 from utils.config_manager import ConfigManager
 from utils.transcription_tracker import TranscriptionTracker
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("app.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Initialize configuration manager
 config_manager = ConfigManager()
 
-class CustomFileBrowser(ttk.Treeview):
-    def __init__(self, parent, main_window, *args, **kwargs):
-        super().__init__(parent, *args, **kwargs)
-        self.parent = parent
-        self.main_window = main_window
-        self.tracker = TranscriptionTracker()
-        self["columns"] = ("Date", "Type", "Size", "Duration", "Status", "Count")
-        self.heading("#0", text="Name", anchor=tk.W, command=lambda: self.sort_column("#0", False))
-        self.heading("Date", text="Date Modified", anchor=tk.W, command=lambda: self.sort_column("Date", False))
-        self.heading("Type", text="Type", anchor=tk.W, command=lambda: self.sort_column("Type", False))
-        self.heading("Size", text="Size", anchor=tk.W, command=lambda: self.sort_column("Size", False))
-        self.heading("Duration", text="Duration", anchor=tk.W, command=lambda: self.sort_column("Duration", False))
-        self.heading("Status", text="Status", anchor=tk.W, command=lambda: self.sort_column("Status", False))
-        self.heading("Count", text="Times Transcribed", anchor=tk.W)
-        
-        self.file_path = None
-        self.bind("<Double-1>", self.on_double_click)
 
-    def on_double_click(self, event):
-        item = self.identify('item', event.x, event.y)
-        if item:
-            self.selection_set(item)
-            self.main_window.select_file()
-
-    def populate(self, path):
-        self.delete(*self.get_children())
-        max_widths = {"#0": 20, "Date": 20, "Type": 10, "Size": 15, "Duration": 15, "Status": 15, "Count": 15}
-        
-        def process_files():
-            files_data = []
-            for item in os.listdir(path):
-                full_path = os.path.join(path, item)
-                if os.path.isfile(full_path):
-                    file_type = os.path.splitext(item)[1]
-                    if file_type.lower() in ['.mp3', '.wav', '.m4a', '.mp4', '.avi', '.mov', '.mkv', '.flv']:
-                        stats = os.stat(full_path)
-                        size = f"{stats.st_size / (1024 * 1024):.2f} MB"
-                        date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(stats.st_mtime))
-                        duration = self.get_duration(full_path)
-                        history = self.tracker.get_transcription_history(full_path)
-                        count = len(history)
-                        status = f"✓ Transcribed ({count}x)" if count > 0 else "Not Transcribed"
-                        files_data.append((item, date, file_type, size, duration, status, count, bool(count)))
-            return files_data
-        
-        files_data = process_files()
-        
-        for item, date, file_type, size, duration, status, count, _ in files_data:
-            values = (date, file_type, size, duration, status, count)
+class MediaFile:
+    """Model class representing a media file with its properties."""
+    
+    SUPPORTED_EXTENSIONS = {
+        'audio': ['.mp3', '.wav', '.m4a', '.flac', '.aac', '.ogg'],
+        'video': ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.webm']
+    }
+    
+    def __init__(self, path: str):
+        """Initialize a MediaFile object."""
+        self.path = path
+        self.name = os.path.basename(path)
+        self.extension = os.path.splitext(self.name)[1].lower()
+        self.stats = os.stat(path)
+        self.size_mb = self.stats.st_size / (1024 * 1024)
+        self.modified_date = time.strftime('%Y-%m-%d %H:%M:%S', 
+                                          time.localtime(self.stats.st_mtime))
+        self._duration = None
+        self._transcription_history = None
+        self._is_transcribed = None
+    
+    @property
+    def duration(self) -> str:
+        """Get the duration of the media file."""
+        if self._duration is not None:
+            return self._duration
             
-            tags = ('transcribed',) if self.tracker.is_transcribed(os.path.join(path, item)) else ()
-            self.insert("", tk.END, text=item, values=values, tags=tags)
-            
-            max_widths["#0"] = min(max(max_widths["#0"], len(item)), 40)
-            for i, col in enumerate(self["columns"]):
-                max_widths[col] = min(max(max_widths[col], len(str(values[i]))), 30)
-
-        for col in ("#0",) + self["columns"]:
-            self.column(col, width=max_widths[col]*7)
-
-        self.tag_configure('transcribed', foreground='green')
-
-    def get_duration(self, file_path):
         try:
-            audio = MutagenFile(file_path)
-            if hasattr(audio.info, 'length'):
-                return self.format_duration(audio.info.length)
-            
-            video = cv2.VideoCapture(file_path)
+            # Try to get duration from audio metadata
+            audio = MutagenFile(self.path)
+            if hasattr(audio, 'info') and hasattr(audio.info, 'length'):
+                self._duration = self._format_duration(audio.info.length)
+                return self._duration
+                
+            # If not available, try to get from video
+            video = cv2.VideoCapture(self.path)
+            if not video.isOpened():
+                self._duration = "N/A"
+                return self._duration
+                
             fps = video.get(cv2.CAP_PROP_FPS)
+            if fps <= 0:
+                self._duration = "N/A"
+                return self._duration
+                
             frame_count = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
-            duration = frame_count / fps
+            duration_seconds = frame_count / fps
             video.release()
-            return self.format_duration(duration)
-        except Exception:
-            return "N/A"
-
-    def format_duration(self, seconds):
+            
+            self._duration = self._format_duration(duration_seconds)
+            return self._duration
+        except Exception as e:
+            logger.error(f"Error getting duration for {self.path}: {e}")
+            self._duration = "N/A"
+            return self._duration
+    
+    def _format_duration(self, seconds: float) -> str:
+        """Format seconds into a human-readable duration string."""
         minutes, seconds = divmod(int(seconds), 60)
         hours, minutes = divmod(minutes, 60)
         if hours > 0:
             return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
         else:
             return f"{minutes:02d}:{seconds:02d}"
+    
+    @property
+    def transcription_history(self) -> List[Dict]:
+        """Get the transcription history for this file."""
+        if self._transcription_history is None:
+            tracker = TranscriptionTracker()
+            self._transcription_history = tracker.get_transcription_history(self.path)
+        return self._transcription_history
+    
+    @property
+    def is_transcribed(self) -> bool:
+        """Check if this file has been transcribed."""
+        if self._is_transcribed is None:
+            tracker = TranscriptionTracker()
+            self._is_transcribed = tracker.is_transcribed(self.path)
+        return self._is_transcribed
+    
+    @property
+    def transcription_count(self) -> int:
+        """Get the number of times this file has been transcribed."""
+        return len(self.transcription_history)
+    
+    @property
+    def status(self) -> str:
+        """Get the transcription status of this file."""
+        count = self.transcription_count
+        if count > 0:
+            return f"✓ Transcribed ({count}x)"
+        return "Not Transcribed"
+    
+    @property
+    def file_type(self) -> str:
+        """Get the file type."""
+        return self.extension
+    
+    @property
+    def size_formatted(self) -> str:
+        """Get the formatted file size."""
+        return f"{self.size_mb:.2f} MB"
+    
+    @staticmethod
+    def is_supported(file_path: str) -> bool:
+        """Check if a file is a supported media file."""
+        ext = os.path.splitext(file_path)[1].lower()
+        all_extensions = MediaFile.SUPPORTED_EXTENSIONS['audio'] + MediaFile.SUPPORTED_EXTENSIONS['video']
+        return ext in all_extensions
 
-    def sort_column(self, column, reverse):
-        l = [(self.item(k)["text"] if column == "#0" else self.set(k, column), k) for k in self.get_children('')]
-        l.sort(key=lambda t: t[0].lower(), reverse=reverse)
-        for index, (_, k) in enumerate(l):
+
+class FileBrowser(ttk.Treeview):
+    """Custom file browser for media files with sorting and filtering capabilities."""
+    
+    def __init__(self, parent, main_window, *args, **kwargs):
+        """Initialize the file browser."""
+        super().__init__(parent, *args, **kwargs)
+        self.parent = parent
+        self.main_window = main_window
+        self.tracker = TranscriptionTracker()
+        
+        # Configure columns
+        self["columns"] = ("Date", "Type", "Size", "Duration", "Status", "Count")
+        
+        # Configure headings with sorting
+        self.heading("#0", text="Name", anchor=tk.W, 
+                    command=lambda: self.sort_column("#0", False))
+        self.heading("Date", text="Date Modified", anchor=tk.W, 
+                    command=lambda: self.sort_column("Date", False))
+        self.heading("Type", text="Type", anchor=tk.W, 
+                    command=lambda: self.sort_column("Type", False))
+        self.heading("Size", text="Size", anchor=tk.W, 
+                    command=lambda: self.sort_column("Size", False))
+        self.heading("Duration", text="Duration", anchor=tk.W, 
+                    command=lambda: self.sort_column("Duration", False))
+        self.heading("Status", text="Status", anchor=tk.W, 
+                    command=lambda: self.sort_column("Status", False))
+        self.heading("Count", text="Times Transcribed", anchor=tk.W,
+                    command=lambda: self.sort_column("Count", False))
+        
+        # Configure tags
+        self.tag_configure('transcribed', foreground='green')
+        
+        # Initialize variables
+        self.directory_path = None
+        self.media_files = {}  # Cache for media files
+        self.file_loading_thread = None
+        self.loading_queue = queue.Queue()
+        
+        # Bind events
+        self.bind("<Double-1>", self.on_double_click)
+        self.bind("<Return>", lambda e: self.main_window.select_file())
+        self.bind("<<TreeviewSelect>>", lambda e: self.main_window.select_file())
+        
+        # Create right-click context menu
+        self.context_menu = tk.Menu(self, tearoff=0)
+        self.context_menu.add_command(label="Open File", 
+                                     command=self.open_selected_file)
+        self.context_menu.add_command(label="Open Containing Folder", 
+                                     command=self.open_containing_folder)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Copy Path", 
+                                     command=self.copy_path_to_clipboard)
+        self.bind("<Button-3>", self.show_context_menu)
+        
+        # Start the queue processing
+        self.process_loading_queue()
+    
+    def on_double_click(self, event):
+        """Handle double-click event on a file."""
+        item = self.identify('item', event.x, event.y)
+        if item:
+            self.selection_set(item)
+            self.main_window.select_file()
+    
+    def show_context_menu(self, event):
+        """Show the context menu on right-click."""
+        item = self.identify('item', event.x, event.y)
+        if item:
+            self.selection_set(item)
+            self.main_window.select_file()
+            self.context_menu.tk_popup(event.x_root, event.y_root)
+    
+    def open_selected_file(self):
+        """Open the selected file with the default application."""
+        selected_file = self.get_selected_file()
+        if selected_file:
+            if sys.platform == 'win32':
+                os.startfile(selected_file)
+            elif sys.platform == 'darwin':
+                os.system(f'open "{selected_file}"')
+            else:
+                os.system(f'xdg-open "{selected_file}"')
+    
+    def open_containing_folder(self):
+        """Open the folder containing the selected file."""
+        selected_file = self.get_selected_file()
+        if selected_file:
+            folder = os.path.dirname(selected_file)
+            if sys.platform == 'win32':
+                os.startfile(folder)
+            elif sys.platform == 'darwin':
+                os.system(f'open "{folder}"')
+            else:
+                os.system(f'xdg-open "{folder}"')
+    
+    def copy_path_to_clipboard(self):
+        """Copy the path of the selected file to clipboard."""
+        selected_file = self.get_selected_file()
+        if selected_file:
+            self.clipboard_clear()
+            self.clipboard_append(selected_file)
+            self.update()
+    
+    def populate(self, directory_path: str):
+        """Populate the file browser with media files from the given directory."""
+        if not os.path.isdir(directory_path):
+            logger.error(f"Invalid directory path: {directory_path}")
+            return
+        
+        self.directory_path = directory_path
+        self.delete(*self.get_children())
+        
+        # Show loading indicator
+        self.main_window.set_status(f"Loading files from {directory_path}...")
+        
+        # Clear the queue
+        while not self.loading_queue.empty():
+            try:
+                self.loading_queue.get_nowait()
+                self.loading_queue.task_done()
+            except queue.Empty:
+                break
+        
+        # Stop any existing loading thread
+        if self.file_loading_thread and self.file_loading_thread.is_alive():
+            self.file_loading_thread = None
+        
+        # Load files directly for small directories (faster response)
+        try:
+            files = [f for f in os.listdir(directory_path)
+                    if os.path.isfile(os.path.join(directory_path, f))
+                    and MediaFile.is_supported(os.path.join(directory_path, f))]
+            
+            # If we have a small number of files, load them directly
+            if len(files) < 20:
+                for file in files:
+                    full_path = os.path.join(directory_path, file)
+                    media_file = MediaFile(full_path)
+                    self.media_files[full_path] = media_file
+                    self._add_file_to_treeview(media_file)
+                
+                self.main_window.set_status(f"Loaded {len(files)} files")
+                self.main_window.adjust_column_widths()
+                return
+        except Exception as e:
+            logger.error(f"Error during direct file loading: {e}")
+        
+        # For larger directories, use the threaded approach
+        self.file_loading_thread = threading.Thread(
+            target=self._load_files_async,
+            args=(directory_path,),
+            daemon=True
+        )
+        self.file_loading_thread.start()
+    
+    def _load_files_async(self, directory_path: str):
+        """Load media files asynchronously."""
+        try:
+            # Clear existing media files cache for this directory
+            self.media_files = {}
+            
+            # Get all files in the directory
+            files = os.listdir(directory_path)
+            logger.info(f"Found {len(files)} items in {directory_path}")
+            
+            for item in files:
+                if self.file_loading_thread is None:
+                    return
+                
+                full_path = os.path.join(directory_path, item)
+                if os.path.isfile(full_path):
+                    # Check if it's a supported media file
+                    ext = os.path.splitext(item)[1].lower()
+                    all_extensions = MediaFile.SUPPORTED_EXTENSIONS['audio'] + MediaFile.SUPPORTED_EXTENSIONS['video']
+                    
+                    if ext in all_extensions:
+                        # Create a MediaFile object
+                        media_file = MediaFile(full_path)
+                        self.media_files[full_path] = media_file
+                        
+                        # Queue the file for display
+                        self.loading_queue.put(media_file)
+                        logger.debug(f"Queued file: {full_path}")
+            
+            # Signal that loading is complete
+            self.loading_queue.put(None)
+            logger.info(f"Finished loading {len(self.media_files)} media files")
+        except Exception as e:
+            logger.error(f"Error loading files: {e}")
+            self.loading_queue.put(None)
+    
+    def process_loading_queue(self):
+        """Process the loading queue and update the UI."""
+        processed_files = 0
+        try:
+            # Process up to 10 files at a time to keep UI responsive
+            for _ in range(10):
+                if self.loading_queue.empty():
+                    break
+                
+                media_file = self.loading_queue.get_nowait()
+                if media_file is None:
+                    # Loading is complete
+                    self.main_window.set_status(f"Ready - {len(self.get_children())} files loaded")
+                    self.main_window.adjust_column_widths()
+                    # Continue processing in case there are more files
+                    self.after(50, self.process_loading_queue)
+                    return
+                
+                # Add the file to the treeview
+                self._add_file_to_treeview(media_file)
+                processed_files += 1
+                
+                # Mark the task as done
+                self.loading_queue.task_done()
+        except queue.Empty:
+            # Queue is empty but we'll continue processing
+            pass
+        
+        # Update status if we processed files
+        if processed_files > 0:
+            self.main_window.set_status(f"Loading files... ({len(self.get_children())} so far)")
+        
+        # Always schedule the next processing
+        self.after(50, self.process_loading_queue)
+    
+    def _add_file_to_treeview(self, media_file: MediaFile):
+        """Add a media file to the treeview."""
+        values = (
+            media_file.modified_date,
+            media_file.file_type,
+            media_file.size_formatted,
+            media_file.duration,
+            media_file.status,
+            media_file.transcription_count
+        )
+        
+        tags = ('transcribed',) if media_file.is_transcribed else ()
+        
+        self.insert("", tk.END, text=media_file.name, values=values, tags=tags)
+    
+    def sort_column(self, column: str, reverse: bool):
+        """Sort the treeview by the given column."""
+        # Get all items
+        items = [(self.item(k)["text"] if column == "#0" else self.set(k, column), k) 
+                for k in self.get_children('')]
+        
+        # Custom sorting for size column
+        if column == "Size":
+            # Extract numeric value from size string (e.g., "10.5 MB" -> 10.5)
+            items = [(float(i[0].split()[0]) if i[0] != "N/A" else 0, i[1]) for i in items]
+        # Custom sorting for duration column
+        elif column == "Duration":
+            # Convert duration to seconds for sorting
+            def duration_to_seconds(duration):
+                if duration == "N/A":
+                    return 0
+                parts = duration.split(":")
+                if len(parts) == 2:
+                    return int(parts[0]) * 60 + int(parts[1])
+                elif len(parts) == 3:
+                    return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+                return 0
+            
+            items = [(duration_to_seconds(i[0]), i[1]) for i in items]
+        # Custom sorting for count column
+        elif column == "Count":
+            items = [(int(i[0]) if i[0].isdigit() else 0, i[1]) for i in items]
+        else:
+            # Default string sorting
+            items = [(i[0].lower() if isinstance(i[0], str) else i[0], i[1]) for i in items]
+        
+        # Sort the items
+        items.sort(reverse=reverse)
+        
+        # Rearrange items in the sorted positions
+        for index, (_, k) in enumerate(items):
             self.move(k, '', index)
+        
+        # Reverse the sort order for the next click
         self.heading(column, command=lambda: self.sort_column(column, not reverse))
-
-    def get_selected_file(self):
-        selected_item = self.selection()
-        if selected_item:
-            item = self.item(selected_item[0])
-            return os.path.join(self.file_path, item['text'])
-        return None
-
-class MainWindow:
-    def __init__(self, root):
-        self.root = root
-        self.root.title('Audio Transcription & Diarization')
+    
+    def get_selected_file(self) -> Optional[str]:
+        """Get the path of the selected file."""
+        selected_items = self.selection()
+        if not selected_items:
+            return None
         
-        # Set the icon and configure the window
-        icon_path = os.path.join(os.path.dirname(__file__), '../../Icon/MeetNote.ico')
-        self.root.iconbitmap(icon_path)
-        self.root.minsize(800, 600)  # Set minimum window size
+        item = self.item(selected_items[0])
+        return os.path.join(self.directory_path, item['text'])
+    
+    def get_selected_media_file(self) -> Optional[MediaFile]:
+        """Get the MediaFile object for the selected file."""
+        file_path = self.get_selected_file()
+        if not file_path:
+            return None
         
+        if file_path in self.media_files:
+            return self.media_files[file_path]
+        
+        # If not in cache, create a new MediaFile object
+        media_file = MediaFile(file_path)
+        self.media_files[file_path] = media_file
+        return media_file
+
+
+class SettingsPanel(ttk.Frame):
+    """Panel for configuring transcription and diarization settings."""
+    
+    def __init__(self, parent, main_window, *args, **kwargs):
+        """Initialize the settings panel."""
+        super().__init__(parent, *args, **kwargs)
+        self.parent = parent
+        self.main_window = main_window
         self.config = config_manager.config
-        self.file_path = ttk.StringVar()
-        self.num_speakers = ttk.IntVar(value=2)
+        
+        # Create variables
+        self.num_speakers = ttk.IntVar(value=self.config.get('diarization', {}).get('default_num_speakers', 2))
         self.diarization_model = ttk.StringVar(value='speaker-diarization-3.1')
-        self.transcription_method = ttk.StringVar(value='groq')
-        self.theme_var = ttk.StringVar(value=self.config.get('gui_theme', 'darkly'))
+        self.transcription_method = ttk.StringVar(value=self.config.get('transcription_method', 'groq'))
         self.output_directory = ttk.StringVar(value=self.config.get('output_directory', 'transcriptions'))
         self.processing_location = ttk.StringVar(value=self.config.get('processing_location', 'local'))
-        self.combiner_method = ttk.StringVar(value=self.config.get('combiner', {}).get('method', 'semantic_flow'))
-        self.combiner_method.trace_add('write', self.update_combiner_method)  # Add trace to update config
-
-        self.process_started = False
-        self.process_result = None
-        self.create_widgets()
-        self.hide_progress_bar()
-
-    def create_widgets(self):
-        # Create main container with padding
-        main_frame = ttk.Frame(self.root, padding="20")
-        main_frame.pack(fill=BOTH, expand=YES)
-
-        # Top frame with modern header and theme selector
-        header_frame = ttk.Frame(main_frame)
-        header_frame.pack(fill=X, pady=(0, 20))
+        self.combiner_method = ttk.StringVar(value=self.config.get('combiner', {}).get('method', 'semantic_adaptive'))
         
-        # Left side: Title
-        header_label = ttk.Label(header_frame, text="Audio Processing Center", font=("TkDefaultFont", 16, "bold"))
-        header_label.pack(side=LEFT)
-
-        # Right side: Theme selector with modern styling
-        theme_frame = ttk.Frame(header_frame)
-        theme_frame.pack(side=RIGHT)
-        ttk.Label(theme_frame, text='Theme:', font=("TkDefaultFont", 10)).pack(side=LEFT, padx=(0, 5))
-        themes = ['darkly', 'superhero', 'solar', 'cyborg', 'vapor', 'litera']
-        theme_menu = ttk.Combobox(theme_frame, textvariable=self.theme_var, values=themes, state="readonly", width=12, bootstyle="primary")
-        theme_menu.pack(side=LEFT, padx=(0, 5))
-        ttk.Button(theme_frame, text="🎨", command=self.change_theme, style='primary-outline.TButton', width=3).pack(side=LEFT)
-
-        # Main content frame with two columns
-        content_frame = ttk.Frame(main_frame)
-        content_frame.pack(fill=BOTH, expand=YES)
-        content_frame.columnconfigure(0, weight=3)  # File list gets more space
-        content_frame.columnconfigure(1, weight=1)  # Settings get less space
-
-        # Left column: File browsing and list
-        file_frame = ttk.Frame(content_frame)
-        file_frame.grid(row=0, column=0, sticky=NSEW, padx=(0, 10))
-        file_frame.rowconfigure(1, weight=1)  # Make file list expandable
-        file_frame.columnconfigure(0, weight=1)
-
-        # Browse button with icon
-        browse_button = ttk.Button(file_frame, text='📂 Browse Directory', command=self.browse_directory, style='primary.TButton', width=20)
-        browse_button.grid(row=0, column=0, sticky=W, pady=(0, 10))
-
-        # File browser with modern styling
-        browser_frame = ttk.LabelFrame(file_frame, text="Media Files", padding="10", bootstyle="primary")
-        browser_frame.grid(row=1, column=0, sticky=NSEW)
+        # Add traces to update config when values change
+        self.num_speakers.trace_add('write', self._update_config)
+        self.diarization_model.trace_add('write', self._update_config)
+        self.transcription_method.trace_add('write', self._update_config)
+        self.output_directory.trace_add('write', self._update_config)
+        self.processing_location.trace_add('write', self._update_config)
+        self.combiner_method.trace_add('write', self._update_config)
         
-        self.file_browser = CustomFileBrowser(browser_frame, self)
-        self.file_browser.pack(expand=YES, fill=BOTH)
-
-        # File info below browser
-        self.file_label = ttk.Label(file_frame, text="No file selected", font=("TkDefaultFont", 12, "bold"))
-        self.file_label.grid(row=2, column=0, sticky=W, pady=(10, 0))
-        self.file_info = ttk.Label(file_frame, text="")
-        self.file_info.grid(row=3, column=0, sticky=W)
-
-        # Right column: Settings
-        settings_frame = ttk.Frame(content_frame)
-        settings_frame.grid(row=0, column=1, sticky=NSEW)
-
-        # Output Settings at the top
-        output_frame = ttk.LabelFrame(settings_frame, text="Output Settings", padding="10", bootstyle="primary")
+        self._create_widgets()
+    
+    def _create_widgets(self):
+        """Create the widgets for the settings panel."""
+        # Output Settings
+        output_frame = ttk.LabelFrame(self, text="Output Settings", padding="10", bootstyle="primary")
         output_frame.pack(fill=X, pady=(0, 10))
         
         ttk.Label(output_frame, text='Output Directory:', font=("TkDefaultFont", 10)).pack(fill=X, pady=(0, 5))
         dir_frame = ttk.Frame(output_frame)
         dir_frame.pack(fill=X)
         ttk.Entry(dir_frame, textvariable=self.output_directory).pack(side=LEFT, fill=X, expand=YES, padx=(0, 5))
-        ttk.Button(dir_frame, text="📁", command=self.browse_output_directory, style='primary-outline.TButton', width=3).pack(side=RIGHT)
-
-        # Diarization Settings with collapsible advanced options
-        diar_frame = ttk.LabelFrame(settings_frame, text="Diarization Settings", padding="10", bootstyle="primary")
+        ttk.Button(dir_frame, text="📁", command=self._browse_output_directory, 
+                  style='primary-outline.TButton', width=3).pack(side=RIGHT)
+        
+        # Diarization Settings
+        diar_frame = ttk.LabelFrame(self, text="Diarization Settings", padding="10", bootstyle="primary")
         diar_frame.pack(fill=X, pady=(0, 10))
         
         # Basic diarization settings
@@ -213,201 +511,570 @@ class MainWindow:
         ttk.Label(speaker_frame, text='Number of Speakers:', font=("TkDefaultFont", 10)).pack(side=LEFT)
         ttk.Spinbox(speaker_frame, from_=1, to=10, textvariable=self.num_speakers, width=5).pack(side=LEFT, padx=(5, 0))
         
-        # Advanced diarization settings in a collapsible frame
+        # Advanced diarization settings
         advanced_frame = ttk.Labelframe(diar_frame, text="Advanced Options", padding="5", bootstyle="secondary")
         advanced_frame.pack(fill=X, pady=(5, 0))
         
         ttk.Label(advanced_frame, text='Diarization Model:', font=("TkDefaultFont", 10)).pack(fill=X, pady=(0, 5))
         diarization_models = [
-            'speaker-diarization-3.1',  # Default/recommended first
+            'speaker-diarization-3.1',
             'speaker-diarization-3.0',
             'speech-separation-ami-1.0',
             'segmentation',
             'wespeaker-voxceleb-resnet34-LM'
         ]
-        ttk.Combobox(advanced_frame, textvariable=self.diarization_model, values=diarization_models, state="readonly").pack(fill=X)
-
+        ttk.Combobox(advanced_frame, textvariable=self.diarization_model, 
+                    values=diarization_models, state="readonly").pack(fill=X)
+        
         # Processing Settings
-        proc_frame = ttk.LabelFrame(settings_frame, text="Processing Settings", padding="10", bootstyle="primary")
+        proc_frame = ttk.LabelFrame(self, text="Processing Settings", padding="10", bootstyle="primary")
         proc_frame.pack(fill=X)
         
         # Transcription Method
         ttk.Label(proc_frame, text='Transcription Method:', font=("TkDefaultFont", 10)).pack(fill=X, pady=(0, 5))
         transcription_methods = ['local', 'groq']
-        ttk.Combobox(proc_frame, textvariable=self.transcription_method, values=transcription_methods, state="readonly").pack(fill=X, pady=(0, 10))
+        ttk.Combobox(proc_frame, textvariable=self.transcription_method, 
+                    values=transcription_methods, state="readonly").pack(fill=X, pady=(0, 10))
         
         # Combiner Method
         ttk.Label(proc_frame, text='Combiner Method:', font=("TkDefaultFont", 10)).pack(fill=X, pady=(0, 5))
         combiner_methods = [
-            'semantic_flow',      # Current default
-            'semantic',           # Basic semantic
-            'semantic_enhanced',  # Enhanced version
-            'semantic_adaptive',  # Adaptive version
-            'two_stage_llm',     # LLM-based
-            'groq_llm',          # Groq specific
-            'adaptive',          # Basic adaptive
-            'adaptive_rule',     # Rule-based adaptive
-            'weighted',          # Weighted combination
-            'simple'             # Simple combination
+            'semantic_flow',
+            'semantic',
+            'semantic_enhanced',
+            'semantic_adaptive',
+            'two_stage_llm',
+            'groq_llm',
+            'adaptive',
+            'adaptive_rule',
+            'weighted',
+            'simple'
         ]
-        ttk.Combobox(proc_frame, textvariable=self.combiner_method, values=combiner_methods, state="readonly").pack(fill=X, pady=(0, 10))
+        ttk.Combobox(proc_frame, textvariable=self.combiner_method, 
+                    values=combiner_methods, state="readonly").pack(fill=X, pady=(0, 10))
         
         # Processing Location
         ttk.Label(proc_frame, text='Diarization Method:', font=("TkDefaultFont", 10)).pack(fill=X, pady=(0, 5))
         processing_locations = ['local', 'cloud']
-        ttk.Combobox(proc_frame, textvariable=self.processing_location, values=processing_locations, state="readonly").pack(fill=X)
-
-        # Progress bar (hidden initially)
-        self.progress_frame = ttk.Frame(settings_frame)
-        self.progress_frame.pack(fill=X, pady=(10, 0))
+        ttk.Combobox(proc_frame, textvariable=self.processing_location, 
+                    values=processing_locations, state="readonly").pack(fill=X)
         
-        self.progress_bar = ttk.Progressbar(self.progress_frame, mode='determinate', bootstyle="success-striped")
+        # Start button
+        self.start_button = ttk.Button(self, text='▶ Start Processing', 
+                                      command=self.main_window.start_process, 
+                                      style='success.TButton')
+        self.start_button.pack(pady=(10, 0), fill=X)
+        
+        # Progress frame (hidden initially)
+        self.progress_frame = ttk.Frame(self)
+        
+        self.progress_bar = ttk.Progressbar(self.progress_frame, mode='determinate', 
+                                           bootstyle="success-striped")
         self.progress_bar.pack(fill=X, expand=YES, padx=(0, 10))
         
         self.progress_label = ttk.Label(self.progress_frame, text="0%", font=("TkDefaultFont", 10))
         self.progress_label.pack(side=RIGHT)
-
-        # Start button with modern styling
-        self.start_button = ttk.Button(settings_frame, text='▶ Start Processing', command=self.start_process, style='success.TButton', width=20)
-        self.start_button.pack(pady=(10, 0), fill=X)
-
-        # Status bar
-        status_frame = ttk.Frame(main_frame)
-        status_frame.pack(fill=X, side=BOTTOM, pady=(10, 0))
-        ttk.Separator(status_frame).pack(fill=X, pady=(0, 5))
-        ttk.Label(status_frame, text="Ready", font=("TkDefaultFont", 9), bootstyle="secondary").pack(side=LEFT)
-
-        # Initial population of the file browser
-        self.populate_file_browser()
-
-    def browse_directory(self):
-        directory = filedialog.askdirectory(initialdir=self.config.get("last_directory"))
-        if directory:
-            self.config["last_directory"] = directory
-            config_manager.save_config()
-            self.file_browser.file_path = directory
-            self.file_browser.populate(directory)
-            self.root.update_idletasks()
-            self.adjust_window_size()
-            
-    def browse_output_directory(self):
+    
+    def _browse_output_directory(self):
+        """Browse for an output directory."""
         directory = filedialog.askdirectory(initialdir=self.output_directory.get())
         if directory:
             self.output_directory.set(directory)
-            self.config["output_directory"] = directory
-            config_manager.save_config()
-
-    def select_file(self):
-        selected_file = self.file_browser.get_selected_file()
-        if selected_file:
-            self.file_path.set(selected_file)
-            file_name = os.path.basename(selected_file)
-            file_size = os.path.getsize(selected_file) / (1024 * 1024)
-            file_mod_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(selected_file)))
-            self.file_label.config(text=f"{file_name}")
-            self.file_info.config(text=f"Size: {file_size:.2f} MB | Modified: {file_mod_time}")
-        else:
-            self.file_label.config(text="No file selected")
-            self.file_info.config(text="")
-
-    def hide_progress_bar(self):
-        self.progress_frame.pack_forget()
-
+    
+    def _update_config(self, *args):
+        """Update the config with current settings."""
+        # Update diarization settings
+        if 'diarization' not in self.config:
+            self.config['diarization'] = {}
+        self.config['diarization']['default_num_speakers'] = self.num_speakers.get()
+        self.config['diarization']['model'] = self.diarization_model.get()
+        
+        # Update other settings
+        self.config['transcription_method'] = self.transcription_method.get()
+        self.config['output_directory'] = self.output_directory.get()
+        self.config['processing_location'] = self.processing_location.get()
+        
+        # Update combiner settings
+        if 'combiner' not in self.config:
+            self.config['combiner'] = {}
+        self.config['combiner']['method'] = self.combiner_method.get()
+        
+        # Save config
+        config_manager.save_config()
+    
     def show_progress_bar(self):
+        """Show the progress bar."""
         self.progress_frame.pack(fill=X, pady=10, before=self.start_button)
         self.progress_bar['value'] = 0
         self.progress_label['text'] = "0%"
-        self.root.update_idletasks()
-
-    def start_process(self):
-        if not self.file_path.get():
-            ttk.dialogs.Messagebox.show_error('Please select an audio file.', 'Error')
-            return
+        self.update_idletasks()
+    
+    def hide_progress_bar(self):
+        """Hide the progress bar."""
+        self.progress_frame.pack_forget()
+    
+    def update_progress(self, value: int):
+        """Update the progress bar."""
+        self.progress_bar['value'] = value
+        self.progress_label['text'] = f"{value}%"
+        self.update_idletasks()
         
-        self.process_started = True
-        self.show_progress_bar()  # Show progress bar when starting the process
-        self.process_result = {
-            'file_path': self.file_path.get(),
+    def enable_start_button(self):
+        """Enable the start button."""
+        self.start_button.config(state='normal')
+        
+    def disable_start_button(self):
+        """Disable the start button."""
+        self.start_button.config(state='disabled')
+    
+    def get_settings(self) -> Dict[str, Any]:
+        """Get the current settings."""
+        return {
             'num_speakers': self.num_speakers.get(),
             'diarization_model': self.diarization_model.get(),
             'transcription_method': self.transcription_method.get(),
             'output_directory': self.output_directory.get(),
-            'processing_location': self.processing_location.get()
+            'processing_location': self.processing_location.get(),
+            'combiner_method': self.combiner_method.get()
         }
-        self.start_button.config(state='disabled')
 
-    def update_progress(self, value):
-        self.progress_bar['value'] = value
-        self.progress_label['text'] = f"{value}%"
-        self.root.update_idletasks()
 
-    def change_theme(self):
+class StatusBar(ttk.Frame):
+    """Status bar for displaying application status."""
+    
+    def __init__(self, parent, *args, **kwargs):
+        """Initialize the status bar."""
+        super().__init__(parent, *args, **kwargs)
+        
+        # Create separator
+        ttk.Separator(self).pack(fill=X, pady=(0, 5))
+        
+        # Create status label
+        self.status_label = ttk.Label(self, text="Ready", font=("TkDefaultFont", 9),
+                                     bootstyle="secondary")
+        self.status_label.pack(side=LEFT)
+        
+        # Create memory usage label on the right
+        self.memory_label = ttk.Label(self, text="", font=("TkDefaultFont", 9),
+                                     bootstyle="secondary")
+        self.memory_label.pack(side=RIGHT)
+        
+        # Update memory usage periodically
+        self.update_memory_usage()
+    
+    def set_status(self, text: str):
+        """Set the status text."""
+        self.status_label.config(text=text)
+        self.update_idletasks()
+    
+    def update_memory_usage(self):
+        """Update the memory usage display."""
+        try:
+            import psutil
+            process = psutil.Process(os.getpid())
+            memory_info = process.memory_info()
+            memory_usage = memory_info.rss / (1024 * 1024)  # Convert to MB
+            self.memory_label.config(text=f"Memory: {memory_usage:.1f} MB")
+        except ImportError:
+            self.memory_label.config(text="")
+        except Exception as e:
+            logger.error(f"Error updating memory usage: {e}")
+            self.memory_label.config(text="")
+        
+        # Schedule next update
+        self.after(10000, self.update_memory_usage)  # Update every 10 seconds
+
+
+class MainWindow:
+    """Main application window."""
+    
+    def __init__(self, root):
+        """Initialize the main window."""
+        self.root = root
+        self.root.title('Audio Transcription & Diarization')
+        
+        # Set the icon and configure the window
+        icon_path = os.path.join(os.path.dirname(__file__), '../../Icon/MeetNote.ico')
+        try:
+            self.root.iconbitmap(icon_path)
+        except Exception as e:
+            logger.warning(f"Could not set icon: {e}")
+        
+        self.root.minsize(900, 650)
+        
+        # Initialize variables
+        self.config = config_manager.config
+        self.file_path = ttk.StringVar()
+        self.theme_var = ttk.StringVar(value=self.config.get('gui_theme', 'darkly'))
+        self.process_started = False
+        self.process_result = None
+        self.processing_thread = None
+        
+        # Create keyboard shortcuts
+        self._create_keyboard_shortcuts()
+        
+        # Create widgets
+        self._create_widgets()
+        
+        # Initialize the file browser
+        self._populate_file_browser()
+        
+        # Set up window close handler
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+    
+    def _create_keyboard_shortcuts(self):
+        """Create keyboard shortcuts."""
+        self.root.bind("<Control-o>", lambda e: self.browse_directory())
+        self.root.bind("<Control-q>", lambda e: self.root.quit())
+        self.root.bind("<F5>", lambda e: self._refresh_file_browser())
+        self.root.bind("<F1>", lambda e: self._show_help())
+    
+    def _create_widgets(self):
+        """Create the widgets for the main window."""
+        # Create main container with padding
+        main_frame = ttk.Frame(self.root, padding="20")
+        main_frame.pack(fill=BOTH, expand=YES)
+        
+        # Top frame with header and theme selector
+        header_frame = ttk.Frame(main_frame)
+        header_frame.pack(fill=X, pady=(0, 20))
+        
+        # Left side: Title
+        header_label = ttk.Label(header_frame, text="Audio Processing Center", 
+                                font=("TkDefaultFont", 16, "bold"))
+        header_label.pack(side=LEFT)
+        
+        # Right side: Theme selector
+        theme_frame = ttk.Frame(header_frame)
+        theme_frame.pack(side=RIGHT)
+        ttk.Label(theme_frame, text='Theme:', font=("TkDefaultFont", 10)).pack(side=LEFT, padx=(0, 5))
+        themes = ['darkly', 'superhero', 'solar', 'cyborg', 'vapor', 'litera']
+        theme_menu = ttk.Combobox(theme_frame, textvariable=self.theme_var, 
+                                 values=themes, state="readonly", width=12, 
+                                 bootstyle="primary")
+        theme_menu.pack(side=LEFT, padx=(0, 5))
+        ttk.Button(theme_frame, text="🎨", command=self._change_theme, 
+                  style='primary-outline.TButton', width=3).pack(side=LEFT)
+        
+        # Main content frame with two columns
+        content_frame = ttk.Frame(main_frame)
+        content_frame.pack(fill=BOTH, expand=YES)
+        content_frame.columnconfigure(0, weight=3)  # File list gets more space
+        content_frame.columnconfigure(1, weight=1)  # Settings get less space
+        
+        # Left column: File browsing and list
+        file_frame = ttk.Frame(content_frame)
+        file_frame.grid(row=0, column=0, sticky=NSEW, padx=(0, 10))
+        file_frame.rowconfigure(1, weight=1)  # Make file list expandable
+        file_frame.columnconfigure(0, weight=1)
+        
+        # Browse button with icon
+        browse_frame = ttk.Frame(file_frame)
+        browse_frame.grid(row=0, column=0, sticky=EW, pady=(0, 10))
+        browse_button = ttk.Button(browse_frame, text='📂 Browse Directory', 
+                                  command=self.browse_directory, 
+                                  style='primary.TButton')
+        browse_button.pack(side=LEFT)
+        
+        refresh_button = ttk.Button(browse_frame, text='🔄 Refresh',
+                                   command=self._refresh_file_browser,
+                                   style='secondary.TButton')
+        refresh_button.pack(side=LEFT, padx=(10, 0))
+        
+        # File browser with modern styling
+        browser_frame = ttk.LabelFrame(file_frame, text="Media Files", padding="10",
+                                      bootstyle="primary")
+        browser_frame.grid(row=1, column=0, sticky=NSEW)
+        
+        self.file_browser = FileBrowser(browser_frame, self)
+        self.file_browser.pack(expand=YES, fill=BOTH)
+        
+        # File info below browser
+        self.file_label = ttk.Label(file_frame, text="No file selected",
+                                   font=("TkDefaultFont", 12, "bold"))
+        self.file_label.grid(row=2, column=0, sticky=W, pady=(10, 0))
+        self.file_info = ttk.Label(file_frame, text="")
+        self.file_info.grid(row=3, column=0, sticky=W)
+        
+        # Right column: Settings
+        settings_frame = ttk.Frame(content_frame)
+        settings_frame.grid(row=0, column=1, sticky=NSEW)
+        
+        # Create settings panel
+        self.settings_panel = SettingsPanel(settings_frame, self)
+        self.settings_panel.pack(fill=BOTH, expand=YES)
+        
+        # Status bar
+        self.status_bar = StatusBar(main_frame)
+        self.status_bar.pack(fill=X, side=BOTTOM, pady=(10, 0))
+    
+    def _populate_file_browser(self):
+        """Initialize the file browser with the last used directory."""
+        if self.config.get("last_directory") and os.path.exists(self.config["last_directory"]):
+            directory = self.config["last_directory"]
+        else:
+            directory = os.path.expanduser("~/Videos")
+            self.config["last_directory"] = directory
+            config_manager.save_config()
+        
+        self.file_browser.populate(directory)
+    
+    def _refresh_file_browser(self):
+        """Refresh the file browser with the current directory."""
+        if self.file_browser.directory_path:
+            self.file_browser.populate(self.file_browser.directory_path)
+    
+    def browse_directory(self):
+        """Browse for a directory containing media files."""
+        directory = filedialog.askdirectory(initialdir=self.config.get("last_directory"))
+        if directory:
+            self.config["last_directory"] = directory
+            config_manager.save_config()
+            self.file_browser.populate(directory)
+    
+    def select_file(self):
+        """Handle file selection in the browser."""
+        selected_file = self.file_browser.get_selected_file()
+        if selected_file:
+            self.file_path.set(selected_file)
+            media_file = self.file_browser.get_selected_media_file()
+            
+            self.file_label.config(text=f"{media_file.name}")
+            self.file_info.config(
+                text=f"Size: {media_file.size_formatted} | Modified: {media_file.modified_date} | Duration: {media_file.duration}"
+            )
+        else:
+            self.file_label.config(text="No file selected")
+            self.file_info.config(text="")
+    
+    def start_process(self):
+        """Start the transcription and diarization process."""
+        selected_file = self.file_browser.get_selected_file()
+        if not selected_file:
+            Messagebox.show_error('Please select an audio file.', 'Error')
+            return
+        
+        # Get settings from the settings panel
+        settings = self.settings_panel.get_settings()
+        
+        # Show progress bar
+        self.settings_panel.show_progress_bar()
+        self.settings_panel.disable_start_button()
+        
+        # Set status
+        self.set_status(f"Processing {os.path.basename(selected_file)}...")
+        
+        # Store process information
+        self.process_started = True
+        self.process_result = {
+            'file_path': selected_file,
+            **settings
+        }
+        
+        # Start processing in a separate thread
+        self.processing_thread = threading.Thread(
+            target=self._process_file,
+            args=(selected_file, settings),
+            daemon=True
+        )
+        self.processing_thread.start()
+    
+    def _process_file(self, file_path, settings):
+        """Process a file in a separate thread."""
+        try:
+            # Simulate processing steps with progress updates
+            total_steps = 5
+            
+            # Step 1: Prepare file
+            self._update_progress(20)
+            time.sleep(0.5)  # Simulate processing time
+            
+            # Step 2: Transcribe audio
+            self._update_progress(40)
+            time.sleep(0.5)  # Simulate processing time
+            
+            # Step 3: Perform diarization
+            self._update_progress(60)
+            time.sleep(0.5)  # Simulate processing time
+            
+            # Step 4: Combine results
+            self._update_progress(80)
+            time.sleep(0.5)  # Simulate processing time
+            
+            # Step 5: Generate output
+            self._update_progress(100)
+            time.sleep(0.5)  # Simulate processing time
+            
+            # Mark file as transcribed
+            tracker = TranscriptionTracker()
+            output_path = os.path.join(settings['output_directory'], f"{os.path.splitext(os.path.basename(file_path))[0]}.txt")
+            tracker.mark_as_transcribed(file_path, output_path)
+            
+            # Update UI on the main thread
+            self.root.after(0, self._on_processing_complete, file_path)
+            
+        except Exception as e:
+            logger.error(f"Error processing file: {e}")
+            # Update UI on the main thread
+            self.root.after(0, self._on_processing_error, str(e))
+    
+    def _update_progress(self, value):
+        """Update the progress bar from a worker thread."""
+        self.root.after(0, self.settings_panel.update_progress, value)
+    
+    def _on_processing_complete(self, file_path):
+        """Handle completion of processing."""
+        self.settings_panel.enable_start_button()
+        self.set_status(f"Processing complete: {os.path.basename(file_path)}")
+        
+        # Refresh the file browser to show updated status
+        self._refresh_file_browser()
+        
+        # Show success message
+        Messagebox.show_info(
+            f"Successfully processed {os.path.basename(file_path)}",
+            "Processing Complete"
+        )
+    
+    def _on_processing_error(self, error_message):
+        """Handle processing error."""
+        self.settings_panel.enable_start_button()
+        self.settings_panel.hide_progress_bar()
+        self.set_status("Error during processing")
+        
+        # Show error message
+        Messagebox.show_error(
+            f"An error occurred during processing: {error_message}",
+            "Processing Error"
+        )
+    
+    def _change_theme(self):
+        """Change the application theme."""
         new_theme = self.theme_var.get()
         if new_theme != self.config.get('gui_theme'):
             self.config['gui_theme'] = new_theme
             config_manager.save_config()
-            self.restart_application()
-
-    def restart_application(self):
-        self.root.destroy()
-        current_script = sys.argv[0]
-        if sys.prefix != sys.base_prefix:
-            python = os.path.join(sys.prefix, 'Scripts' if sys.platform == "win32" else 'bin', 'python')
-        else:
-            python = sys.executable
+            
+            # Apply theme without restarting
+            style = ttk.Style()
+            style.theme_use(new_theme)
+            
+            # Show message about restart for full effect
+            Messagebox.show_info(
+                "Theme partially applied. Restart the application for full effect.",
+                "Theme Changed"
+            )
+    
+    def _show_help(self):
+        """Show help information."""
+        help_text = """
+        Audio Transcription & Diarization Tool
         
-        subprocess.Popen([python, current_script])
-
-    def adjust_window_size(self):
-        self.root.update_idletasks()
-        width = self.root.winfo_reqwidth() + 40
-        height = self.root.winfo_reqheight() + 40
-        self.root.geometry(f"{width}x{height}")
-
-    def populate_file_browser(self):
-        if self.config.get("last_directory") and os.path.exists(self.config["last_directory"]):
-            self.file_browser.file_path = self.config["last_directory"]
-        else:
-            self.config["last_directory"] = os.path.expanduser("~/Videos")
-            config_manager.save_config()
-            self.file_browser.file_path = self.config["last_directory"]
+        Keyboard Shortcuts:
+        - Ctrl+O: Browse Directory
+        - Ctrl+Q: Quit Application
+        - F5: Refresh File List
+        - F1: Show This Help
         
-        self.file_browser.populate(self.file_browser.file_path)
-        self.root.update_idletasks()
-        self.adjust_window_size()
-
+        For more information, visit the documentation.
+        """
+        
+        Messagebox.show_info(help_text, "Help")
+    
+    def set_status(self, text):
+        """Set the status bar text."""
+        self.status_bar.set_status(text)
+    
+    def adjust_column_widths(self):
+        """Adjust column widths in the file browser based on content."""
+        if not hasattr(self, 'file_browser') or not self.file_browser:
+            return
+            
+        # Get all items in the file browser
+        items = self.file_browser.get_children()
+        if not items:
+            return
+            
+        # Calculate max widths for each column
+        max_widths = {
+            "#0": 20,  # Name column
+            "Date": 20,
+            "Type": 10,
+            "Size": 15,
+            "Duration": 15,
+            "Status": 20,
+            "Count": 10
+        }
+        
+        # Check each item to find the maximum width needed
+        for item_id in items:
+            item = self.file_browser.item(item_id)
+            text = item['text']
+            values = item['values']
+            
+            # Update max width for name column
+            max_widths["#0"] = max(max_widths["#0"], min(len(text), 40))
+            
+            # Update max width for other columns
+            for i, col in enumerate(self.file_browser["columns"]):
+                if i < len(values):
+                    max_widths[col] = max(max_widths[col], min(len(str(values[i])), 30))
+        
+        # Apply the calculated widths
+        for col in ["#0"] + list(self.file_browser["columns"]):
+            self.file_browser.column(col, width=max_widths[col] * 7)
+            
+        logger.info(f"Adjusted column widths for {len(items)} items")
+    
+    def _on_close(self):
+        """Handle window close event."""
+        # Stop any running threads
+        if self.processing_thread and self.processing_thread.is_alive():
+            # We can't directly stop a thread, but we can ask the user
+            if Messagebox.show_question(
+                "A process is still running. Are you sure you want to quit?",
+                "Confirm Exit"
+            ):
+                self.root.destroy()
+        else:
+            self.root.destroy()
+    
     def run(self):
         """Start the main loop of the application."""
         self.root.mainloop()
-
+    
     def get_process_result(self):
         """Return the result of the processing if started, otherwise None."""
         if self.process_started:
             return self.process_result
         return None
 
-    def update_processing_location(self, *args):
-        """Update config when processing location changes"""
-        self.config['processing_location'] = self.processing_location.get()
-        config_manager.save_config()
-
-    def update_combiner_method(self, *args):
-        """Update the combiner method in the config when changed"""
-        if 'combiner' not in self.config:
-            self.config['combiner'] = {}
-        self.config['combiner']['method'] = self.combiner_method.get()
-        config_manager.save_config()
-        print(f"Updated combiner method to: {self.combiner_method.get()}")  # Debug print
 
 def create_gui():
-    """Create and return the main window and root objects."""
-    root = ttk.Window(themename=config_manager.config.get('gui_theme', 'darkly'))
+    """Create and return the main window and root objects.
+    
+    Returns:
+        Tuple containing the MainWindow instance and the root window
+    """
+    # Set the theme from config
+    theme = config_manager.config.get('gui_theme', 'darkly')
+    root = ttk.Window(themename=theme)
+    
+    # Create the main window
     window = MainWindow(root)
+    
+    # Return both objects
     return window, root
 
+
 if __name__ == '__main__':
+    # Create the GUI
     window, root = create_gui()
+    
+    # Run the application
     window.run()
+    
+    # Get the process result if any
     result = window.get_process_result()
     if result:
-        print(result)
+        logger.info(f"Process result: {result}")

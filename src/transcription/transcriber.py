@@ -59,8 +59,8 @@ def transcribe_audio_with_groq(file_path):
         transcription_result = []
         cumulative_duration = 0
         max_retries = 5
-        active_model = "distil-whisper-large-v3-en"  # Primary model
-        fallback_model = "whisper-large-v3-turbo"    # Fallback option
+        fallback_model = "distil-whisper-large-v3-en"  # Primary model
+        active_model = "whisper-large-v3-turbo"    # Fallback option
         
         # Initialize list of chunks to process
         chunks_to_process = list(chunks)

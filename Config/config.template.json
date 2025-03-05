@@ -28,7 +28,7 @@
         "line_spacing": 1.2
     },
     "combiner": {
-        "method": "semantic_flow",
+        "method": "semantic_adaptive",
         "model": "llama3-groq-70b-8192-tool-use-preview"
     },
     "last_directory": "PATH_TO_YOUR_LAST_DIRECTORY",
