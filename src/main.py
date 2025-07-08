@@ -24,6 +24,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 config_manager = ConfigManager()
 
 def update_progress(window, progress):
+    logging.info(f"Updating progress to {progress}%. Window type: {type(window)}")
+    logging.info(f"Window has settings_panel: {hasattr(window, 'settings_panel')}")
+    if hasattr(window, 'settings_panel'):
+        logging.info(f"settings_panel has update_progress: {hasattr(window.settings_panel, 'update_progress')}")
     window.update_progress(progress)
 
 def main():

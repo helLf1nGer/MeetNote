@@ -984,6 +984,19 @@ class MainWindow:
     def set_status(self, text):
         """Set the status bar text."""
         self.status_bar.set_status(text)
+        
+    def update_progress(self, progress):
+        """Update the progress bar with the given value.
+        
+        This delegates to the settings_panel's update_progress method.
+        
+        Args:
+            progress (int): Progress value between 0 and 100
+        """
+        if hasattr(self, 'settings_panel'):
+            self.settings_panel.update_progress(progress)
+        else:
+            logging.warning("Cannot update progress: settings_panel not initialized")
     
     def adjust_column_widths(self):
         """Adjust column widths in the file browser based on content."""

@@ -19,6 +19,11 @@ secrets/
 *_key.json
 *_credentials.json
 
+#Context Portal
+alembic.ini
+alembic/
+pplx-chats.db
+
 # Transcriptions output
 Transcriptions/
 
