@@ -11,12 +11,6 @@ Key features:
 - User-friendly GUI for easy operation
 - Support for various audio and video formats
 - Customizable output in PDF format
-- Audio and video file transcription using Groq API or local Whisper model
-- Speaker diarization using pyannote.audio
-- File tracking system to identify previously transcribed files
-- Visual indicators for transcribed files in the GUI
-- Persistent tracking across sessions using file hashing
-- Support for file renaming while maintaining transcription status
 
 MeetNote is suitable for transcribing meetings, interviews, podcasts, and any multi-speaker audio content.
 
@@ -26,9 +20,11 @@ MeetNote is suitable for transcribing meetings, interviews, podcasts, and any mu
 2. [Usage](#usage)
 3. [Configuration](#configuration)
 4. [Common Issues](#common-issues)
-5. [Development Branch: Combiner Testing](#development-branch-combiner-testing)
+5. [Advanced Features](#advanced-features)
 6. [Contributing](#contributing)
 7. [License](#license)
+8. [Author](#author)
+9. [Acknowledgments](#acknowledgments)
 
 ## Installation
 
@@ -57,6 +53,8 @@ MeetNote is suitable for transcribing meetings, interviews, podcasts, and any mu
    ```
    pip install -r requirements.txt
    ```
+   
+   Note: This includes all dependencies including sentence-transformers and scikit-learn for advanced combiner methods.
 
 4. Install PyTorch with CUDA support (if using GPU):
    ```
@@ -120,14 +118,14 @@ MeetNote is suitable for transcribing meetings, interviews, podcasts, and any mu
   - `combiner`: Configure the combining strategy:
     ```json
     "combiner": {
-        "method": "semantic_flow",  // Default combiner method
+        "method": "semantic_adaptive",  // Default combiner method
         "model": "llama3-groq-70b-8192-tool-use-preview"  // Used by LLM-based combiners
     }
     ```
     Available combiner methods:
-    - semantic_flow (default): Best balance of accuracy and performance
+    - semantic_adaptive: Dynamically adjusts thresholds (default)
+    - semantic_flow: Best balance of accuracy and performance
     - semantic: Basic semantic similarity-based combining
-    - semantic_adaptive: Dynamically adjusts thresholds
     - semantic_enhanced: Finer-grained segment analysis
     - simple: Basic time-based combining
     - weighted: Enhanced time-based combining
@@ -183,58 +181,30 @@ Note: Make sure you have an active internet connection when running the tests, a
    - Ensure you have write permissions in the output directory
    - Check if a custom font is properly installed in the `Fonts` directory
 
-## Development Branch: Combiner Testing
+## Advanced Features
 
-We have an active development branch `dev-combiner-testing` that focuses on improving and expanding our combiner methods. This branch includes experimental features and tools for testing various combining strategies.
+### Multiple Combiner Methods
 
-### Key Features in dev-combiner-testing
+MeetNote includes various combiner methods for merging transcription and diarization results:
 
-1. Multiple Combiner Methods:
-   - Semantic Flow Combiner (Default): Best balance of accuracy and performance
-   - Semantic Combiner: Basic semantic similarity approach
-   - Adaptive Semantic Combiner: Dynamic threshold adjustment
-   - Enhanced Semantic Combiner: Fine-grained segment analysis
-   - Groq LLM Combiner: Advanced language model processing
-   - Two-Stage LLM Combiner: Hybrid semantic-LLM approach
-   - Local LLaMa Tiny Combiner: Offline processing option
-   - And more...
+- **Semantic Adaptive Combiner**: Dynamically adjusts thresholds (default)
+- **Semantic Flow Combiner**: Best balance of accuracy and performance
+- **Semantic Combiner**: Basic semantic similarity approach
+- **Semantic Enhanced Combiner**: Finer-grained segment analysis
+- **Simple Combiner**: Basic time-based combining
+- **Weighted Combiner**: Enhanced time-based combining
+- **Adaptive Combiner**: Self-adjusting thresholds
+- **Adaptive Rule Combiner**: Rule-based adaptation
+- **Groq LLM Combiner**: Advanced language model processing
+- **Two-Stage LLM Combiner**: Hybrid semantic-LLM approach
+- **Local LLaMa Tiny Combiner**: Offline processing option
 
-2. Development Tools:
-   - `dev_main.py`: A development version of the main script for testing combiners
-   - `combiner_testing.py`: Utility for testing and comparing different combiner methods
-   - Rate limiter for API calls
+### Development Tools
 
-3. New Integrations:
-   - Groq API support for advanced language model processing
-   - Local LLaMa model support for offline processing capabilities
-   - Sentence transformers for improved semantic analysis
-
-4. Enhanced Configuration and GUI:
-   - More flexible configuration options for different combiner methods
-   - Development GUI for easier testing and comparison of combiners
-
-### Accessing the Development Branch
-
-To explore or contribute to these new features:
-
-1. Clone the repository (if you haven't already):
-   ```
-   git clone https://github.com/helLf1nGer/meetnote.git
-   ```
-
-2. Switch to the development branch:
-   ```
-   git checkout dev-combiner-testing
-   ```
-
-3. Install additional dependencies:
-   ```
-   pip install groq sentence-transformers
-   ```
-
-4. Refer to the updated documentation in the `Docs/` directory for detailed information on new features and usage.
-
-Note: Features in the development branch are experimental and may not be stable. Use with caution in production environments.
+- `dev_main.py`: Development version for testing combiners
+- `combiner_testing.py`: Utility for comparing different combiner methods
+- Built-in rate limiter for API calls
+- Enhanced GUI for easier testing and comparison
 
 ## Contributing
 
@@ -250,16 +220,21 @@ Please ensure your code adheres to our coding standards and include tests for ne
 
 ## License
 
-### MIT License
-
-Copyright (c) 2024 Ivan Bondarenko
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
 
 For more detailed information, please check our [documentation](Docs) or open an [Issue](https://github.com/helLf1nGer/meetnote/issues) if you encounter any problems.
+
+---
+
+## Author
+
+**Ivan Bondarenko** - [helLf1nGer](https://github.com/helLf1nGer)
+
+## Acknowledgments
+
+- OpenAI Whisper team for the transcription models
+- PyAnnote team for the diarization framework
+- Groq for providing fast inference API
+- All contributors who have helped improve this project
