@@ -16,23 +16,31 @@ def process_file(file_path):
     else:
         raise ValueError(f"Unsupported file type: {file_type}")
 
+AUDIO_EXTENSIONS = {'.mp3', '.wav', '.m4a', '.flac', '.ogg', '.opus', '.aac', '.wma', '.aiff'}
+VIDEO_EXTENSIONS = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.wmv', '.flv', '.m4v', '.mpg', '.mpeg'}
+
+
 def _analyze_file(file_path):
     """Analyze the input file and return its type."""
     _, ext = os.path.splitext(file_path)
     ext = ext.lower()
-    
-    if ext in ['.mp3', '.wav', '.m4a', '.flac']:
+
+    if ext in AUDIO_EXTENSIONS:
         return 'audio'
-    elif ext in ['.mp4', '.avi', '.mov', '.mkv']:
+    elif ext in VIDEO_EXTENSIONS:
         return 'video'
     else:
-        raise ValueError(f"Unsupported file format: {ext}")
+        supported = ', '.join(sorted(AUDIO_EXTENSIONS | VIDEO_EXTENSIONS))
+        raise ValueError(f"Unsupported file format: {ext}. Supported formats: {supported}")
 
 def extract_audio(file_path):
     """Extract audio from video file to a temporary MP3 file."""
     logger.info(f"Extracting audio from video: {file_path}")
     try:
-        output_path = tempfile.mktemp(suffix='.mp3')
+        # mkstemp creates the file atomically; mktemp only returns a name and
+        # leaves a window for another process to claim it.
+        handle, output_path = tempfile.mkstemp(suffix='.mp3')
+        os.close(handle)
         (
             ffmpeg
             .input(file_path)

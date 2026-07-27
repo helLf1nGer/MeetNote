@@ -3,20 +3,24 @@ import json
 import hashlib
 import os
 import logging
-from concurrent.futures import ThreadPoolExecutor
-from functools import lru_cache
 from datetime import datetime
+
+# Two levels up from src/utils, matching ConfigManager.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 
 class TranscriptionTracker:
     def __init__(self):
-        self.tracker_file = Path("data/transcribed_files.json")
+        # Anchored to the project root rather than the working directory, so
+        # launching from elsewhere still finds the same tracker file.
+        self.tracker_file = PROJECT_ROOT / 'data' / 'transcribed_files.json'
         self._ensure_tracker_file()
         self.transcribed_files = self._load_tracker()
         self._hash_cache = {}
         self._migrate_existing_data()
     
     def _ensure_tracker_file(self):
-        self.tracker_file.parent.mkdir(exist_ok=True)
+        self.tracker_file.parent.mkdir(parents=True, exist_ok=True)
         if not self.tracker_file.exists():
             self.tracker_file.write_text("{}")
     
@@ -52,15 +56,27 @@ class TranscriptionTracker:
         except Exception as e:
             logging.error(f"Error saving tracker file: {e}")
     
-    @lru_cache(maxsize=1000)
     def _calculate_file_hash(self, file_path):
-        """Calculate SHA-256 hash of file content with caching"""
+        """
+        Calculate a content hash for a file, cached on its size and mtime.
+
+        This deliberately does not use ``functools.lru_cache``: keyed on the
+        path alone, that returns the old hash after a file has been edited, so
+        a modified recording would be reported as already transcribed. The
+        size/mtime key below is what makes the cache safe to reuse.
+
+        Large files are sampled (first and last 1 MB) rather than read whole,
+        which keeps browsing a directory of recordings responsive.
+        """
         stats = os.stat(file_path)
-        metadata_key = f"{stats.st_size}_{stats.st_mtime}"
-        
-        if metadata_key in self._hash_cache:
-            return self._hash_cache[metadata_key]
-            
+        cache_key = (str(file_path), stats.st_size, stats.st_mtime)
+
+        cached = self._hash_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        # Note: the digest covers only the sampled bytes. Changing what goes
+        # into it would invalidate every existing entry in the tracker file.
         sha256_hash = hashlib.sha256()
         with open(file_path, "rb") as f:
             if stats.st_size > 2_000_000:  # 2MB
@@ -69,9 +85,9 @@ class TranscriptionTracker:
                 sha256_hash.update(f.read())
             else:
                 sha256_hash.update(f.read())
-        
+
         file_hash = sha256_hash.hexdigest()
-        self._hash_cache[metadata_key] = file_hash
+        self._hash_cache[cache_key] = file_hash
         return file_hash
     
     def mark_as_transcribed(self, file_path, output_path=''):

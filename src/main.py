@@ -1,154 +1,130 @@
-import os
+"""
+Entry point for MeetNote.
+
+Without arguments this launches the GUI. With a file argument it runs the same
+pipeline headlessly, which is useful for batch work and for testing changes
+without clicking through the interface.
+"""
+
+import argparse
 import logging
+import os
+import sys
+
 from dotenv import load_dotenv
-from concurrent.futures import ThreadPoolExecutor
-import torch
-import time
-from audio.file_processor import process_file
-from transcription.transcriber import transcribe_audio_with_groq, create_local_model, transcribe_audio
-from diarization.diarizer import diarize_audio
-from utils.result_combiner import combine_transcription_diarization
-from utils.output_generator import create_pdf
+
 from utils.config_manager import ConfigManager
-from gui.main_window import create_gui
+from utils.languages import DEFAULT_LANGUAGE, LANGUAGE_CODES
+from utils.logging_setup import configure_logging
 
-from pyannote.audio import Pipeline
-from utils.transcription_tracker import TranscriptionTracker
-
-# Load environment variables
 load_dotenv()
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configured here, once, before anything else logs. Doing this via
+# logging.basicConfig in two modules meant whichever imported first won, so
+# deferring an import could silently disable file logging.
+_log_file = configure_logging()
+logger = logging.getLogger(__name__)
+if _log_file:
+    logger.info("Logging to %s", _log_file)
 
-config_manager = ConfigManager()
 
-def update_progress(window, progress):
-    logging.info(f"Updating progress to {progress}%. Window type: {type(window)}")
-    logging.info(f"Window has settings_panel: {hasattr(window, 'settings_panel')}")
-    if hasattr(window, 'settings_panel'):
-        logging.info(f"settings_panel has update_progress: {hasattr(window.settings_panel, 'update_progress')}")
-    window.update_progress(progress)
+def main(argv=None):
+    args = _parse_args(argv)
+    if args.file:
+        return _run_cli(args)
+    return _run_gui()
 
-def main():
+
+def _parse_args(argv):
+    parser = argparse.ArgumentParser(
+        prog='meetnote',
+        description='Transcribe and diarize audio or video. Launches the GUI when no file is given.',
+    )
+    parser.add_argument('file', nargs='?', help='Audio or video file to process.')
+    parser.add_argument(
+        '-l', '--language', choices=LANGUAGE_CODES, default=None,
+        help=f"Spoken language, or 'auto' to detect it (default: from config, initially '{DEFAULT_LANGUAGE}').",
+    )
+    parser.add_argument(
+        '-o', '--output', default=None,
+        help='Directory for the generated PDF (default: from config).',
+    )
+    parser.add_argument(
+        '-s', '--speakers', type=int, default=None,
+        help='Number of speakers to detect, or 0 to let pyannote decide '
+             '(default: from config).',
+    )
+    parser.add_argument(
+        '-m', '--method', choices=['local', 'groq'], default=None,
+        help='Transcription backend (default: from config).',
+    )
+    parser.add_argument(
+        '--translate', action='store_true',
+        help='Translate the speech into English instead of transcribing verbatim.',
+    )
+    return parser.parse_args(argv)
+
+
+def _run_gui():
+    from gui.main_window import create_gui
+
     try:
-        # Create GUI
-        window, root = create_gui()
-        
-        # Start GUI main loop and periodically check if process has started
-        root.after(100, lambda: check_process_start(window, root))
+        _window, root = create_gui()
         root.mainloop()
-        
+        return 0
     except Exception as e:
-        logging.error(f"An error occurred: {str(e)}")
+        logger.error("An error occurred: %s", e)
         raise
 
-def check_process_start(window, root):
-    if window.process_started:
-        # Process has started, begin actual processing
-        process(window, root)
-    else:
-        # Check again after 100ms
-        root.after(100, lambda: check_process_start(window, root))
 
-def process(window, root):
+def _run_cli(args):
+    from pipeline import run_pipeline
+
+    if not os.path.isfile(args.file):
+        logger.error("File not found: %s", args.file)
+        return 1
+
+    config_manager = ConfigManager()
+    config = config_manager.config
+    settings = {
+        'file_path': os.path.abspath(args.file),
+        # `or` would be wrong here: -s 0 requests auto-detection, and being
+        # falsy it would silently fall back to the configured count instead.
+        'num_speakers': (args.speakers if args.speakers is not None
+                         else config.get('diarization', {}).get('default_num_speakers', 2)),
+        'diarization_model': config.get('diarization', {}).get('model', 'speaker-diarization-3.1'),
+        'transcription_method': args.method or config.get('transcription_method', 'local'),
+        'processing_location': config.get('processing_location', 'local'),
+        'output_directory': args.output or config.get('output_directory'),
+        'combiner_method': config.get('combiner', {}).get('method'),
+        'language': args.language or config.get('transcription', {}).get('language'),
+    }
+
+    # --translate applies to this run only; the pipeline persists the config it
+    # runs with, so the previous value is put back afterwards rather than
+    # silently becoming the new default for the GUI.
+    transcription = config.setdefault('transcription', {})
+    previous_task = transcription.get('task', 'transcribe')
+    if args.translate:
+        transcription['task'] = 'translate'
+
+    def show_progress(percent, message):
+        print(f"[{percent:3d}%] {message}", flush=True)
+
     try:
-        user_input = window.get_process_result()
-        if user_input is None:
-            return
-
-        file_path = user_input['file_path']
-        processing_location = user_input['processing_location']  # will be "local" or "cloud"
-        start_time = time.time()
-        num_speakers = user_input['num_speakers']
-        pipeline_model = f"pyannote/{user_input['diarization_model']}"
-        transcription_method = user_input['transcription_method']
-        output_directory = user_input['output_directory']
-
-        # Update config with the new output directory
-        config = config_manager.config
-        config['output_directory'] = output_directory
-        config_manager.save_config()
-
-        # Process the input file
-        update_progress(window, 10)
-        processed_file = process_file(file_path)
-
-        # Initialize pipeline, getting token from environment or config
-        hugging_face_token = os.getenv('HUGGING_FACE_AUTH_TOKEN') or config.get('hugging_face_auth_token')
-        if not hugging_face_token:
-            raise ValueError("HUGGING_FACE_AUTH_TOKEN not found in environment variables or config.")
-        pipeline = Pipeline.from_pretrained(pipeline_model, use_auth_token=hugging_face_token)
-
-        update_progress(window, 20)
-
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            if transcription_method == 'groq':
-                # Run diarization and Groq transcription concurrently
-                diarization_future = executor.submit(diarize_audio, pipeline, processed_file, num_speakers, processing_location)
-                transcription_future = executor.submit(transcribe_audio_with_groq, processed_file)
-
-                # Wait for both tasks to complete
-                diarization, diarization_device = diarization_future.result()
-                transcription = transcription_future.result()
-
-                print(f"\nDiarization was performed on: {diarization_device.upper()}")
-                print("Transcription was performed using Groq API.")
-            else:
-                # For local transcription, keep the sequential process
-                diarization, diarization_device = diarize_audio(pipeline, processed_file, num_speakers, processing_location)
-                update_progress(window, 40)
-                model_whisper, whisper_device = create_local_model(config)
-                transcription = transcribe_audio(model_whisper, processed_file)
-
-                print(f"\nDiarization was performed on: {diarization_device.upper()}")
-                print(f"Transcription was performed on: {whisper_device.upper()}")
-                print(f"Using local model: {config['model_options']['local']['model']}")
-
-        # Clear CUDA cache after diarization if GPU was used
-        if config['use_cuda'] and torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-        update_progress(window, 60)
-
-        # Combine transcription and diarization information
-        final_transcription = combine_transcription_diarization(transcription, diarization, pipeline_model)
-
-        update_progress(window, 80)
-
-        # Create PDF from the final transcription
-        output_pdf = create_pdf(final_transcription, file_path)
-
-        update_progress(window, 100)
-
-        # Print final confirmation, transcription text, and elapsed time
-        print_results(final_transcription, output_pdf, start_time)
-
-        # After successful processing, mark the file as transcribed with output path
-        tracker = TranscriptionTracker()
-        tracker.mark_as_transcribed(file_path, output_pdf)
-        
-        # Update the file browser display
-        if hasattr(window, 'file_browser'):
-            window.file_browser.populate(os.path.dirname(file_path))
-
-        # Close the GUI
-        root.quit()
-
+        result = run_pipeline(settings, progress_callback=show_progress)
     except Exception as e:
-        logging.error(f"An error occurred: {str(e)}")
-        raise
+        logger.error("Processing failed: %s", e)
+        return 1
+    finally:
+        if args.translate:
+            config.setdefault('transcription', {})['task'] = previous_task
+            config_manager.save_config()
 
-def print_results(final_transcription, output_pdf, start_time):
-    logging.info(f"Transcription PDF saved as {output_pdf}")
-    if config_manager.config['misc']['print_to_terminal']:
-        print("\nTranscription Output:")
-        for item in final_transcription:
-            if 'start' in item and 'end' in item:
-                print(f"{item['speaker']} ({item['start']:.2f} - {item['end']:.2f}): {item['text']}")
-            else:
-                print(f"{item['speaker']}: {item['text']}")
-    logging.info(f"Script executed in {time.time() - start_time:.2f} seconds.")
+    print(f"\nSaved: {result['output_pdf']}")
+    print(f"Elapsed: {result['elapsed']:.1f}s")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
