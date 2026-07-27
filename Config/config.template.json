@@ -9,7 +9,8 @@
             "compute_type": "float16"
         },
         "groq": {
-            "model": "whisper-large-v3"
+            "model": "whisper-large-v3-turbo",
+            "fallback_model": "whisper-large-v3"
         }
     },
     "use_cuda": true,
@@ -17,19 +18,38 @@
     "diarization": {
         "min_speakers": 1,
         "max_speakers": 10,
-        "default_num_speakers": 2
+        "default_num_speakers": 2,
+        "segmentation_batch_size": 16,
+        "embedding_batch_size": 16
     },
     "transcription": {
         "language": "en",
-        "task": "transcribe"
+        "task": "transcribe",
+        "decode": {
+            "vad_filter": true,
+            "vad_parameters": {
+                "threshold": 0.5,
+                "min_silence_duration_ms": 1000,
+                "speech_pad_ms": 400
+            },
+            "condition_on_previous_text": false,
+            "word_timestamps": true,
+            "hallucination_silence_threshold": 2.0,
+            "beam_size": 5,
+            "hotwords": null
+        }
     },
     "pdf_output": {
         "font_size": 12,
         "line_spacing": 1.2
     },
+    "output": {
+        "formats": ["pdf", "txt", "json", "srt", "md"],
+        "timestamps_in_pdf": true
+    },
     "combiner": {
-        "method": "semantic_adaptive",
-        "model": "llama3-groq-70b-8192-tool-use-preview"
+        "method": "weighted",
+        "model": "llama-3.3-70b-versatile"
     },
     "last_directory": "PATH_TO_YOUR_LAST_DIRECTORY",
     "gui_theme": "cyborg"
