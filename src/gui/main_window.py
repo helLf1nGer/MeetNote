@@ -25,17 +25,17 @@ import cv2
 from mutagen import File as MutagenFile
 
 from utils.config_manager import ConfigManager
+from utils.languages import (
+    DEFAULT_LANGUAGE,
+    SUPPORTED_LANGUAGES,
+    code_for,
+    label_for,
+)
 from utils.transcription_tracker import TranscriptionTracker
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("app.log"),
-        logging.StreamHandler()
-    ]
-)
+# Logging is configured centrally in utils.logging_setup, called from main.
+# A basicConfig call here would be a no-op whenever main ran first, and would
+# silently take over the root logger when it did not.
 logger = logging.getLogger(__name__)
 
 # Initialize configuration manager
@@ -477,7 +477,10 @@ class SettingsPanel(ttk.Frame):
         self.output_directory = ttk.StringVar(value=self.config.get('output_directory', 'transcriptions'))
         self.processing_location = ttk.StringVar(value=self.config.get('processing_location', 'local'))
         self.combiner_method = ttk.StringVar(value=self.config.get('combiner', {}).get('method', 'semantic_adaptive'))
-        
+        self.language = ttk.StringVar(
+            value=self.config.get('transcription', {}).get('language', DEFAULT_LANGUAGE)
+        )
+
         # Add traces to update config when values change
         self.num_speakers.trace_add('write', self._update_config)
         self.diarization_model.trace_add('write', self._update_config)
@@ -485,6 +488,7 @@ class SettingsPanel(ttk.Frame):
         self.output_directory.trace_add('write', self._update_config)
         self.processing_location.trace_add('write', self._update_config)
         self.combiner_method.trace_add('write', self._update_config)
+        self.language.trace_add('write', self._update_config)
         
         self._create_widgets()
     
@@ -508,8 +512,13 @@ class SettingsPanel(ttk.Frame):
         # Basic diarization settings
         speaker_frame = ttk.Frame(diar_frame)
         speaker_frame.pack(fill=X, pady=(0, 5))
-        ttk.Label(speaker_frame, text='Number of Speakers:', font=("TkDefaultFont", 10)).pack(side=LEFT)
-        ttk.Spinbox(speaker_frame, from_=1, to=10, textvariable=self.num_speakers, width=5).pack(side=LEFT, padx=(5, 0))
+        # 0 is spelled out in the label rather than displayed as "Auto": the
+        # Spinbox `format` option is printf-style and so cannot substitute a
+        # word for a number, and swapping in a StringVar would mean every reader
+        # of self.num_speakers having to parse it.
+        ttk.Label(speaker_frame, text='Number of Speakers (0 = Auto):',
+                  font=("TkDefaultFont", 10)).pack(side=LEFT)
+        ttk.Spinbox(speaker_frame, from_=0, to=10, textvariable=self.num_speakers, width=5).pack(side=LEFT, padx=(5, 0))
         
         # Advanced diarization settings
         advanced_frame = ttk.Labelframe(diar_frame, text="Advanced Options", padding="5", bootstyle="secondary")
@@ -533,12 +542,26 @@ class SettingsPanel(ttk.Frame):
         # Transcription Method
         ttk.Label(proc_frame, text='Transcription Method:', font=("TkDefaultFont", 10)).pack(fill=X, pady=(0, 5))
         transcription_methods = ['local', 'groq']
-        ttk.Combobox(proc_frame, textvariable=self.transcription_method, 
+        ttk.Combobox(proc_frame, textvariable=self.transcription_method,
                     values=transcription_methods, state="readonly").pack(fill=X, pady=(0, 10))
-        
-        # Combiner Method
+
+        # Language. The combobox shows names but self.language holds the code.
+        ttk.Label(proc_frame, text='Language:', font=("TkDefaultFont", 10)).pack(fill=X, pady=(0, 5))
+        self.language_display = ttk.StringVar(value=label_for(self.language.get()))
+        ttk.Combobox(proc_frame, textvariable=self.language_display,
+                    values=[name for name, _ in SUPPORTED_LANGUAGES],
+                    state="readonly").pack(fill=X, pady=(0, 10))
+        self.language_display.trace_add('write', self._on_language_selected)
+
+        # Combiner Method. Ordered by measured assignment accuracy: word_level
+        # splits segments at mid-segment speaker changes (needs word timestamps,
+        # falls back to weighted without them); weighted is the segment-level
+        # default that passed every regression case.
         ttk.Label(proc_frame, text='Combiner Method:', font=("TkDefaultFont", 10)).pack(fill=X, pady=(0, 5))
         combiner_methods = [
+            'word_level',
+            'weighted',
+            'simple',
             'semantic_flow',
             'semantic',
             'semantic_enhanced',
@@ -547,8 +570,7 @@ class SettingsPanel(ttk.Frame):
             'groq_llm',
             'adaptive',
             'adaptive_rule',
-            'weighted',
-            'simple'
+            'local_llama_tiny'
         ]
         ttk.Combobox(proc_frame, textvariable=self.combiner_method, 
                     values=combiner_methods, state="readonly").pack(fill=X, pady=(0, 10))
@@ -581,6 +603,10 @@ class SettingsPanel(ttk.Frame):
         if directory:
             self.output_directory.set(directory)
     
+    def _on_language_selected(self, *args):
+        """Translate the selected display name back into a language code."""
+        self.language.set(code_for(self.language_display.get()))
+
     def _update_config(self, *args):
         """Update the config with current settings."""
         # Update diarization settings
@@ -588,17 +614,22 @@ class SettingsPanel(ttk.Frame):
             self.config['diarization'] = {}
         self.config['diarization']['default_num_speakers'] = self.num_speakers.get()
         self.config['diarization']['model'] = self.diarization_model.get()
-        
+
         # Update other settings
         self.config['transcription_method'] = self.transcription_method.get()
         self.config['output_directory'] = self.output_directory.get()
         self.config['processing_location'] = self.processing_location.get()
-        
+
+        # Update transcription settings
+        if 'transcription' not in self.config:
+            self.config['transcription'] = {}
+        self.config['transcription']['language'] = self.language.get()
+
         # Update combiner settings
         if 'combiner' not in self.config:
             self.config['combiner'] = {}
         self.config['combiner']['method'] = self.combiner_method.get()
-        
+
         # Save config
         config_manager.save_config()
     
@@ -635,7 +666,8 @@ class SettingsPanel(ttk.Frame):
             'transcription_method': self.transcription_method.get(),
             'output_directory': self.output_directory.get(),
             'processing_location': self.processing_location.get(),
-            'combiner_method': self.combiner_method.get()
+            'combiner_method': self.combiner_method.get(),
+            'language': self.language.get()
         }
 
 
@@ -880,62 +912,44 @@ class MainWindow:
         self.processing_thread.start()
     
     def _process_file(self, file_path, settings):
-        """Process a file in a separate thread."""
+        """Run the real transcription pipeline on a worker thread."""
+        # Imported here rather than at module scope so that merely opening the
+        # GUI does not pull in torch and pyannote.
+        from pipeline import run_pipeline
+
         try:
-            # Simulate processing steps with progress updates
-            total_steps = 5
-            
-            # Step 1: Prepare file
-            self._update_progress(20)
-            time.sleep(0.5)  # Simulate processing time
-            
-            # Step 2: Transcribe audio
-            self._update_progress(40)
-            time.sleep(0.5)  # Simulate processing time
-            
-            # Step 3: Perform diarization
-            self._update_progress(60)
-            time.sleep(0.5)  # Simulate processing time
-            
-            # Step 4: Combine results
-            self._update_progress(80)
-            time.sleep(0.5)  # Simulate processing time
-            
-            # Step 5: Generate output
-            self._update_progress(100)
-            time.sleep(0.5)  # Simulate processing time
-            
-            # Mark file as transcribed
-            tracker = TranscriptionTracker()
-            output_path = os.path.join(settings['output_directory'], f"{os.path.splitext(os.path.basename(file_path))[0]}.txt")
-            tracker.mark_as_transcribed(file_path, output_path)
-            
-            # Update UI on the main thread
-            self.root.after(0, self._on_processing_complete, file_path)
-            
+            result = run_pipeline(
+                {**settings, 'file_path': file_path},
+                progress_callback=self._update_progress,
+            )
+            self.root.after(0, self._on_processing_complete, file_path, result)
         except Exception as e:
-            logger.error(f"Error processing file: {e}")
-            # Update UI on the main thread
+            logger.exception("Error processing file: %s", file_path)
             self.root.after(0, self._on_processing_error, str(e))
-    
-    def _update_progress(self, value):
+
+    def _update_progress(self, value, message=''):
         """Update the progress bar from a worker thread."""
         self.root.after(0, self.settings_panel.update_progress, value)
+        if message:
+            self.root.after(0, self.set_status, message)
     
-    def _on_processing_complete(self, file_path):
+    def _on_processing_complete(self, file_path, result=None):
         """Handle completion of processing."""
         self.settings_panel.enable_start_button()
+        self.settings_panel.hide_progress_bar()
         self.set_status(f"Processing complete: {os.path.basename(file_path)}")
-        
+
         # Refresh the file browser to show updated status
         self._refresh_file_browser()
-        
-        # Show success message
-        Messagebox.show_info(
-            f"Successfully processed {os.path.basename(file_path)}",
-            "Processing Complete"
-        )
-    
+
+        details = f"Successfully processed {os.path.basename(file_path)}"
+        if result:
+            details += (
+                f"\n\nSaved to: {result['output_pdf']}"
+                f"\nElapsed: {result['elapsed']:.1f}s"
+            )
+        Messagebox.show_info(details, "Processing Complete")
+
     def _on_processing_error(self, error_message):
         """Handle processing error."""
         self.settings_panel.enable_start_button()
@@ -1044,10 +1058,18 @@ class MainWindow:
         # Stop any running threads
         if self.processing_thread and self.processing_thread.is_alive():
             # We can't directly stop a thread, but we can ask the user
-            if Messagebox.show_question(
-                "A process is still running. Are you sure you want to quit?",
-                "Confirm Exit"
-            ):
+            # show_question returns the *text* of the button pressed, not a
+            # bool. Both "Yes" and "No" are truthy, so testing it directly
+            # quit either way - discarding a run that could be an hour in.
+            answer = Messagebox.show_question(
+                "A transcription is still running.\n\n"
+                "Quitting now discards it. Transcription and diarization "
+                "results are saved, so re-running the same file will resume "
+                "from them.\n\nQuit anyway?",
+                "Confirm Exit",
+                buttons=["Keep running:secondary", "Quit:danger"],
+            )
+            if answer == "Quit":
                 self.root.destroy()
         else:
             self.root.destroy()
