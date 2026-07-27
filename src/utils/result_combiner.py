@@ -10,6 +10,7 @@ from . import semantic_flow_combiner
 from . import local_llama_tiny_combiner
 from . import groq_llm_combiner
 from . import two_stage_llm_combiner
+from . import word_level_combiner
 from .config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,8 @@ def combine_transcription_diarization(transcription, diarization, pipeline_model
             return groq_llm_combiner.combine(transcription, diarization)
         elif method == 'two_stage_llm':
             return two_stage_llm_combiner.combine(transcription, diarization)
+        elif method == 'word_level':
+            return word_level_combiner.combine(transcription, diarization)
         else:
             raise ValueError(f"Unknown combination method: {method}")
     except Exception as e:
