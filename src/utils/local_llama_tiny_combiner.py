@@ -4,7 +4,8 @@ from typing import List, Dict
 import logging
 import re
 
-logging.basicConfig(level=logging.INFO)
+# No basicConfig here: a library module that configures the root logger hijacks
+# it from whichever entry point imported it. See utils.logging_setup.
 logger = logging.getLogger(__name__)
 
 class LocalLlamaTinyCombiner:

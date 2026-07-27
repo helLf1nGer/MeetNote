@@ -1,18 +1,22 @@
-import logging
-from typing import List, Dict
-from .groq_api_helper import groq_api_call, count_tokens
-from .rate_limiter import RateLimiter
 import ast
+import json
+import logging
+import re
+from typing import List, Dict
 
-logging.basicConfig(level=logging.INFO)
+from .groq_api_helper import count_tokens, get_default_model, groq_api_call
+
 logger = logging.getLogger(__name__)
 
 class GroqLLMCombiner:
-    def __init__(self, model="llama3-groq-70b-8192-tool-use-preview"):
-        self.model = model
+    def __init__(self, model=None):
+        # Defaults to the model configured under `combiner.model`.
+        self.model = model or get_default_model()
         self.max_tokens = 7500  # Leave some room for the prompt and response
 
-    @RateLimiter(max_calls=30, period=60)
+    # Rate limiting lives in groq_api_helper.groq_api_call, which is where the
+    # requests are actually issued. Applying it here would have limited whole
+    # batches to 30/minute while leaving the per-chunk calls unbounded.
     def combine(self, transcription: List[Dict]) -> List[Dict]:
         chunks = self._split_transcription(transcription)
         logger.info(f"Split transcription into {len(chunks)} chunks")
@@ -92,9 +96,34 @@ class GroqLLMCombiner:
         response = groq_api_call(messages, self.model, max_tokens=self.max_tokens)
         return response
 
+    @staticmethod
+    def _extract_json(response: str):
+        """
+        Parse the model's reply into Python data.
+
+        The prompt asks for JSON, but replies often arrive wrapped in a markdown
+        fence or with a sentence in front. json.loads is tried first because
+        ast.literal_eval cannot handle JSON's true/false/null literals.
+        """
+        text = (response or '').strip()
+
+        fenced = re.search(r'```(?:json)?\s*(.*?)```', text, re.DOTALL)
+        if fenced:
+            text = fenced.group(1).strip()
+        else:
+            # Fall back to the outermost array in the reply.
+            array = re.search(r'\[.*\]', text, re.DOTALL)
+            if array:
+                text = array.group(0)
+
+        try:
+            return json.loads(text)
+        except ValueError:
+            return ast.literal_eval(text)
+
     def _parse_response(self, response: str, chunk: List[Dict]) -> List[Dict]:
         try:
-            parsed_response = ast.literal_eval(response)
+            parsed_response = self._extract_json(response)
             if not isinstance(parsed_response, list):
                 raise ValueError("Response is not a list")
             

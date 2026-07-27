@@ -23,12 +23,18 @@ def combine(transcription, diarization):
                 max_score = score
                 best_dia = dia
 
-        if best_dia:
-            combined_results.append({
-                'speaker': best_dia['speaker'],
-                'text': trans['text'],
-                'start': trans['start'],
-                'end': trans['end']
-            })
+        # A segment with no overlapping speaker turn still has to be emitted.
+        # Skipping it silently deleted transcribed speech from the output.
+        combined_results.append({
+            'speaker': best_dia['speaker'] if best_dia else 'Unknown',
+            'text': trans['text'],
+            'start': trans['start'],
+            'end': trans['end']
+        })
+
+    unlabelled = sum(1 for s in combined_results if s['speaker'] == 'Unknown')
+    if unlabelled:
+        logger.warning("[Combiner] %d of %d segments had no overlapping speaker turn.",
+                       unlabelled, len(combined_results))
 
     return combined_results

@@ -38,11 +38,18 @@ class SemanticFlowCombiner:
                 # If there are overlapping diarization segments, choose the one with the most overlap
                 best_dia = max(overlapping_dia, key=lambda d: self.overlap_duration(trans, d))
                 assigned_speaker = best_dia['speaker']
-            else:
+            elif diarization:
                 # If no overlap, assign the nearest speaker in time
-                nearest_dia = min(diarization, key=lambda d: min(abs(d['start'] - trans['end']), abs(d['end'] - trans['start'])))
+                nearest_dia = min(diarization, key=lambda d: min(abs(d['start'] - trans['end']),
+                                                                 abs(d['end'] - trans['start'])))
                 assigned_speaker = nearest_dia['speaker']
-            
+            else:
+                # pyannote can legitimately return no turns; min() over an empty
+                # sequence would raise and kill the run after all of the
+                # transcription work was already done.
+                assigned_speaker = 'Unknown'
+
+
             assigned_segments.append({**trans, 'speaker': assigned_speaker})
 
         return assigned_segments

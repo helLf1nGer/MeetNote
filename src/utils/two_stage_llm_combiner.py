@@ -1,20 +1,20 @@
 import logging
-from .groq_api_helper import groq_api_call, count_tokens
-from .rate_limiter import RateLimiter
 from typing import List, Dict
-from .semantic_flow_combiner import SemanticFlowCombiner
-from .groq_llm_combiner import GroqLLMCombiner
 
-logging.basicConfig(level=logging.INFO)
+from .groq_api_helper import get_default_model
+from .groq_llm_combiner import GroqLLMCombiner
+from .semantic_flow_combiner import SemanticFlowCombiner
+
 logger = logging.getLogger(__name__)
 
 class TwoStageLLMCombiner:
-    def __init__(self, model="llama3-groq-70b-8192-tool-use-preview"):
-        self.model = model
+    def __init__(self, model=None):
+        self.model = model or get_default_model()
         self.semantic_flow = SemanticFlowCombiner()
-        self.groq_combiner = GroqLLMCombiner(model)
+        self.groq_combiner = GroqLLMCombiner(self.model)
 
-    @RateLimiter(max_calls=30, period=60)
+    # Rate limiting lives in groq_api_helper.groq_api_call, which is where the
+    # requests are actually issued.
     def combine(self, transcription: List[Dict], diarization: List[Dict]) -> List[Dict]:
         # Stage 1: Apply Semantic Flow
         semantic_flow_output = self.semantic_flow.combine(transcription, diarization)
