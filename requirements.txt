@@ -1,10 +1,15 @@
 --extra-index-url https://download.pytorch.org/whl/cu118
 torch
-torchvision
 torchaudio
+# torchvision was listed but is never imported, and nothing here requires it
+# outside optional extras - it only added a large download to fresh installs.
 pydub==0.25.1
 pyannote.audio==3.3.1
 faster-whisper==1.0.2
+# CTranslate2 <4.5 links against cuDNN 8, but torch's CUDA 12 wheels bundle
+# cuDNN 9. Mixing them fails at the first convolution with
+# "Could not locate cudnn_ops_infer64_8.dll".
+ctranslate2>=4.5.0,<5
 groq==0.9.0
 fpdf2==2.7.9
 ffmpeg-python==0.2.0
@@ -16,3 +21,11 @@ opencv-python==4.10.0.84
 numpy==1.26.3
 sentence-transformers==3.0.1
 scikit-learn==1.5.0
+tiktoken==0.7.0
+requests==2.32.3
+# Only used by the optional cloud (Vertex AI) diarization path. It was
+# previously pulled in transitively, so the app broke if that chain changed.
+google-auth==2.38.0
+# Test suite. Needed in the same environment as the ML packages, otherwise the
+# combiner and transcriber tests silently skip instead of running.
+pytest==8.3.3

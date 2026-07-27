@@ -9,8 +9,10 @@ Key features:
 - Speaker diarization using PyAnnote
 - Intelligent combination of transcription and diarization results
 - User-friendly GUI for easy operation
+- Command-line mode for batch and scripted use
+- Multi-language transcription with optional auto-detection
 - Support for various audio and video formats
-- Customizable output in PDF format
+- Timestamped output as PDF, plain text, JSON, SRT subtitles and Markdown notes
 
 MeetNote is suitable for transcribing meetings, interviews, podcasts, and any multi-speaker audio content.
 
@@ -19,12 +21,13 @@ MeetNote is suitable for transcribing meetings, interviews, podcasts, and any mu
 1. [Installation](#installation)
 2. [Usage](#usage)
 3. [Configuration](#configuration)
-4. [Common Issues](#common-issues)
-5. [Advanced Features](#advanced-features)
-6. [Contributing](#contributing)
-7. [License](#license)
-8. [Author](#author)
-9. [Acknowledgments](#acknowledgments)
+4. [Output Formats](#output-formats)
+5. [Common Issues](#common-issues)
+6. [Advanced Features](#advanced-features)
+7. [Contributing](#contributing)
+8. [License](#license)
+9. [Author](#author)
+10. [Acknowledgments](#acknowledgments)
 
 ## Installation
 
@@ -91,6 +94,8 @@ MeetNote is suitable for transcribing meetings, interviews, podcasts, and any mu
 
 ## Usage
 
+### GUI
+
 1. Run the application:
    ```
    python run.py
@@ -99,6 +104,7 @@ MeetNote is suitable for transcribing meetings, interviews, podcasts, and any mu
 2. Use the GUI to:
    - Select an audio/video file
    - Choose transcription method (local Whisper or Groq Cloud)
+   - Choose the spoken language (or "Auto-detect")
    - Set the number of speakers
    - Select diarization model
    - Choose output directory
@@ -107,39 +113,147 @@ MeetNote is suitable for transcribing meetings, interviews, podcasts, and any mu
 
 4. Once complete, find the PDF output in your specified directory.
 
+### Command line
+
+Passing a file runs the same pipeline without opening the GUI, which is handy
+for batch work:
+
+```
+python run.py meeting.mp4                      # uses your saved settings
+python run.py interview.mp3 -l ru -s 2         # Russian, two speakers
+python run.py call.m4a -l auto -o ./out        # detect the language
+python run.py lecture.mkv -l uk --translate    # Ukrainian speech, English output
+python run.py recording.wav -m groq            # force the Groq backend
+```
+
+Run `python run.py --help` for the full list of options.
+
+## Languages
+
+English is the default, but any Whisper-supported language works. Set it in the
+GUI's **Language** dropdown, with `--language` on the command line, or via
+`transcription.language` in `Config/config.json`:
+
+```json
+"transcription": {
+    "language": "ru",
+    "task": "transcribe"
+}
+```
+
+Use `"auto"` to detect the language per file. Built-in choices are English,
+Russian, Ukrainian, Polish, German, French, Spanish, Italian, Portuguese, Dutch,
+Czech, Romanian, Turkish, Japanese, Korean and Chinese; any other Whisper
+language code also works if you set it in the config directly.
+
+Set `"task": "translate"` (or pass `--translate`) to render non-English speech
+as English text instead of transcribing it verbatim.
+
+### Two things worth knowing
+
+**English-only models are swapped automatically.** The default local model is
+`medium.en`, which is English-only — given Russian it returns fluent-looking
+nonsense rather than an error. When the language is anything other than English,
+the multilingual equivalent (`medium`) is selected instead. The first run in a
+new language therefore downloads that model. Set
+`model_options.local.model` to `medium` or `large-v3` to avoid keeping both.
+
+**Non-Latin output needs the bundled font.** PDF generation falls back to a
+built-in font that cannot represent Cyrillic. `Fonts/DejaVuSans.ttf` ships with
+the project and is used automatically; if it is missing, transcripts containing
+non-Latin text fail with a clear message rather than producing an empty PDF.
+
 ## Configuration
 
-- Edit `Config/config.json` to change default settings.
+- Edit `Config/config.json` to change default settings. Missing keys are filled
+  in from the defaults on load, so an older config keeps working after an update.
 - Key configurations:
   - `use_cuda`: Enable/disable GPU acceleration
-  - `model_options`: Choose Whisper model size for local transcription
+  - `model_options.local.model`: Whisper model size for local transcription
+  - `model_options.groq.model` / `.fallback_model`: Groq speech models; the
+    fallback is used when the primary is rate-limited
+  - `transcription.language`: Spoken language code, or `"auto"`
+  - `transcription.task`: `"transcribe"` or `"translate"`
   - `diarization`: Adjust speaker detection parameters
-  - `transcription.method`: Set to "groq" to use Groq API or "local" for Whisper model
+  - `transcription_method`: Set to "groq" to use Groq API or "local" for Whisper model
   - `combiner`: Configure the combining strategy:
     ```json
     "combiner": {
-        "method": "semantic_adaptive",  // Default combiner method
-        "model": "llama3-groq-70b-8192-tool-use-preview"  // Used by LLM-based combiners
+        "method": "weighted",                // Default combiner method
+        "model": "llama-3.3-70b-versatile"   // Used by LLM-based combiners
     }
     ```
-    Available combiner methods:
-    - semantic_adaptive: Dynamically adjusts thresholds (default)
-    - semantic_flow: Best balance of accuracy and performance
-    - semantic: Basic semantic similarity-based combining
-    - semantic_enhanced: Finer-grained segment analysis
-    - simple: Basic time-based combining
-    - weighted: Enhanced time-based combining
-    - adaptive: Self-adjusting thresholds
-    - adaptive_rule: Rule-based adaptation
-    - groq_llm: Uses Groq API for LLM-based combining
-    - two_stage_llm: Combines semantic and LLM approaches
-    - local_llama_tiny: Uses local LLaMa model
+    Recommended combiner methods (regression-tested against known
+    speaker-assignment failure cases):
+    - word_level: Assigns each *word* to its speaker and splits segments at
+      mid-segment speaker changes. Most accurate; needs local transcription
+      with word timestamps (the default decode settings provide them) and
+      falls back to `weighted` without them.
+    - weighted: Segment-level maximum-overlap assignment (default). The only
+      segment-level combiner that passed every regression case.
+    - simple: Basic time-based combining.
+
+    Legacy methods, kept for comparison — each has known defects found in
+    testing: `semantic` and `adaptive` can hand a segment to a short
+    backchannel turn; `semantic_adaptive` picks the first overlapping turn
+    rather than the longest and misses contained turns; `semantic_flow`
+    relabels quick on-topic replies with the previous speaker; their
+    embedding models are English-only, so they carry no signal for
+    Russian/Ukrainian audio. `groq_llm` ignores diarization entirely;
+    `two_stage_llm` and `local_llama_tiny` build on the above.
 
 Note: Ensure your Groq API key is correctly set in the `.env` file when using the Groq transcription method or LLM-based combiners.
 
+## Output Formats
+
+Every transcription writes a PDF plus a set of sidecar files sharing its
+basename, all UTF-8:
+
+| Format | Contents |
+| ------ | -------- |
+| `.pdf` | The primary artifact; each line prefixed `[HH:MM:SS]` |
+| `.txt` | `[HH:MM:SS] SPEAKER: text`, one line per segment |
+| `.json` | `[{"start", "end", "speaker", "text"}, ...]` with numeric seconds |
+| `.srt` | SubRip subtitles, for captioned playback of the recording |
+| `.md` | Meeting notes; consecutive segments from one speaker merged |
+
+```json
+"output": {
+    "formats": ["pdf", "txt", "json", "srt", "md"],
+    "timestamps_in_pdf": true
+}
+```
+
+- `formats`: which files to write. Drop the ones you do not want. `pdf` is
+  always produced regardless, since it is the recorded output of a run.
+- `timestamps_in_pdf`: set to `false` for a PDF of bare `SPEAKER: text` lines.
+  This is a PDF-layout preference only — the sidecars keep their timestamps.
+
+Segments whose combiner did not supply timestamps degrade gracefully: the text
+formats fall back to an unstamped `SPEAKER: text` line, `.json` records `null`,
+and `.srt` skips them (a subtitle with no time range has nowhere to go). A
+sidecar that cannot be written logs a warning and does not fail the run.
+
+## Running the Tests
+
+The unit tests cover language and model resolution, config handling, chunk
+sizing, the rate limiter, transcription tracking and PDF output. They need no
+API keys and no audio:
+
+```
+pytest
+```
+
+Tests that contact a live service are skipped unless you ask for them:
+
+```
+pytest --run-network
+```
+
 ## Verifying Your Setup
 
-After installation, you can verify that everything is set up correctly by running the test script from the project root directory:
+To check your environment end to end — API keys, GPU, model downloads — run the
+setup script from the project root:
 
 ```
 python test_setup.py
@@ -181,23 +295,51 @@ Note: Make sure you have an active internet connection when running the tests, a
    - Ensure you have write permissions in the output directory
    - Check if a custom font is properly installed in the `Fonts` directory
 
+6. **Transcript is English gibberish for Russian/Ukrainian audio**:
+   - The language is still set to English. Change it in the GUI's Language
+     dropdown, or set `transcription.language` in `Config/config.json`.
+
+7. **"characters outside Latin-1" error when saving the PDF**:
+   - `Fonts/DejaVuSans.ttf` is missing. Restore it from the `dejavu-sans`
+     directory or download DejaVu Sans again.
+
+8. **A model download starts after switching language**:
+   - Expected. English-only checkpoints such as `medium.en` cannot handle other
+     languages, so the multilingual build is fetched the first time you need it.
+
+9. **"Could not locate cudnn_ops_infer64_8.dll" (or `cudnn_ops64_9.dll`)**:
+   - CTranslate2 and PyTorch disagree about the cuDNN version. CTranslate2
+     below 4.5.0 needs cuDNN 8, while torch's CUDA 12 wheels bundle cuDNN 9.
+   - Fix: `pip install -U "ctranslate2>=4.5.0,<5"`
+   - Diarization is unaffected because it goes through torch, so this shows up
+     as a GPU failure during transcription only. The app now checks for this
+     before transcribing and falls back to CPU rather than crashing mid-run.
+
 ## Advanced Features
 
 ### Multiple Combiner Methods
 
-MeetNote includes various combiner methods for merging transcription and diarization results:
+MeetNote merges transcription and diarization through pluggable combiners.
+`weighted` (segment-level max-overlap) is the default; `word_level` assigns
+speakers per word and is the most accurate when word timestamps are available.
+See the Configuration section for the full list and the known defects of the
+legacy semantic/LLM combiners.
 
-- **Semantic Adaptive Combiner**: Dynamically adjusts thresholds (default)
-- **Semantic Flow Combiner**: Best balance of accuracy and performance
-- **Semantic Combiner**: Basic semantic similarity approach
-- **Semantic Enhanced Combiner**: Finer-grained segment analysis
-- **Simple Combiner**: Basic time-based combining
-- **Weighted Combiner**: Enhanced time-based combining
-- **Adaptive Combiner**: Self-adjusting thresholds
-- **Adaptive Rule Combiner**: Rule-based adaptation
-- **Groq LLM Combiner**: Advanced language model processing
-- **Two-Stage LLM Combiner**: Hybrid semantic-LLM approach
-- **Local LLaMa Tiny Combiner**: Offline processing option
+### Crash resilience
+
+Transcription and diarization results are saved to `data/intermediate/` the
+moment they exist. If a run fails later — an unreachable output folder, a
+crash while writing — re-running the same file with the same settings resumes
+from the saved results instead of repeating the GPU work. The cache entry is
+removed once the output files are safely written.
+
+### Automatic speaker count
+
+Set the speaker spinbox (or `-s`) to `0` and pyannote chooses the speaker
+count itself, bounded by `diarization.min_speakers`/`max_speakers` (default
+1–10). Prefer this when the count is uncertain: forcing it too low merges
+different speakers irrecoverably, while auto detection is usually within one
+of the truth.
 
 ### Development Tools
 
