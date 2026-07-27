@@ -23,6 +23,9 @@ secrets/
 alembic.ini
 alembic/
 pplx-chats.db
+# Local agent-memory database, not project source. The live SQLite WAL/shm
+# sidecars in particular must never be versioned.
+context_portal/
 
 # Transcriptions output
 Transcriptions/
@@ -49,8 +52,10 @@ credentials.json
 # Stable directory (development versions)
 Stable/
 
-# Tests
-tests/
+# Tests: track the test code, ignore the result artifacts it produces
+tests/*
+!tests/*.py
+!tests/conftest.py
 
 # IDE specific files
 .vscode/
