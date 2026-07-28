@@ -40,6 +40,13 @@ MERGE_GAP_SECONDS = 0.75
 # spoken.
 MERGE_TURN_GAP_SECONDS = 0.1
 
+# Slack for comparing gaps against the thresholds above. Timestamps arrive as
+# binary floats, so a gap that is 0.1s in decimal computes as
+# 0.10000000000000009 and would fall outside an inclusive 0.1 boundary. A
+# microsecond is far below diarization's real resolution, so this only fixes the
+# representation error and cannot merge anything meaningfully further apart.
+GAP_TOLERANCE_SECONDS = 1e-6
+
 
 def combine(transcription, diarization):
     """
@@ -255,9 +262,13 @@ def _merge_turns(turns):
 
     pyannote routinely splits one continuous utterance into several turns at
     breaths and short pauses. Left fragmented, those pieces distort per-turn
-    overlap comparisons - see ``_assign``. Merging is per speaker rather than
-    between list neighbours, because an interleaved speaker in between does not
-    make the pieces any less continuous.
+    overlap comparisons - see ``_assign``. Grouping is per speaker rather than
+    between list neighbours, since the fragments of one utterance are not
+    necessarily adjacent in the list.
+
+    A gap is only closed when nobody else is speaking in it. Bridging across
+    another speaker's turn would hand that speaker's words to the person either
+    side of them - the exact mis-attribution this combiner exists to prevent.
     """
     by_speaker = {}
     for turn in turns:
@@ -267,14 +278,19 @@ def _merge_turns(turns):
     joined = 0
 
     for speaker, speaker_turns in by_speaker.items():
+        others = [turn for turn in turns if turn['speaker'] != speaker]
         current = None
         for turn in sorted(speaker_turns, key=lambda turn: turn['start']):
-            # <= so that exactly-abutting turns (gap 0.0, the common pyannote
-            # case) merge; a negative gap means they overlap, which also merges.
-            if current is not None and turn['start'] - current['end'] <= MERGE_TURN_GAP_SECONDS:
-                current['end'] = max(current['end'], turn['end'])
-                joined += 1
-                continue
+            if current is not None:
+                gap = turn['start'] - current['end']
+                # A tolerance rather than a bare <=: the gap is floating-point
+                # subtraction, so turns exactly MERGE_TURN_GAP_SECONDS apart
+                # come out as 0.10000000000000009 and would miss the boundary.
+                bridgeable = gap <= MERGE_TURN_GAP_SECONDS + GAP_TOLERANCE_SECONDS
+                if bridgeable and not _occupied(current['end'], turn['start'], others):
+                    current['end'] = max(current['end'], turn['end'])
+                    joined += 1
+                    continue
             current = {'start': turn['start'], 'end': turn['end'], 'speaker': speaker}
             merged.append(current)
 
@@ -284,6 +300,13 @@ def _merge_turns(turns):
 
     merged.sort(key=lambda turn: turn['start'])
     return merged
+
+
+def _occupied(start, end, others):
+    """Whether any of ``others`` speaks inside the interval ``(start, end)``."""
+    if end <= start:
+        return False
+    return any(turn['start'] < end and turn['end'] > start for turn in others)
 
 
 def _count(counts, key):
@@ -398,12 +421,39 @@ def _usable_words(segment, text):
         # so the list is deliberately not re-sorted by time.
         words.append({'start': start, 'end': max(end, start), 'word': str(piece)})
 
-    if text and not ''.join(word['word'] for word in words).strip():
+    joined = ''.join(word['word'] for word in words).strip()
+
+    if text and not joined:
         # Word strings that are all whitespace would replace real text with an
         # empty segment.
         return None
 
+    # The word list has to account for the segment's whole text, not merely be
+    # well-formed. A truncated list - every entry valid, but covering only the
+    # first few words - passed every structural check and then silently dropped
+    # the rest of the utterance, which is the one outcome a combiner must never
+    # produce. Comparing on alphanumerics only, because the two spellings
+    # legitimately differ in whitespace and punctuation placement.
+    if text and _comparable(joined) != _comparable(text):
+        logger.warning("[Combiner] word_level: word list for the segment at %.2fs does "
+                       "not reconstruct its text (%d vs %d characters); falling back to "
+                       "whole-segment assignment so no speech is dropped.",
+                       words[0]['start'], len(_comparable(joined)), len(_comparable(text)))
+        return None
+
     return words
+
+
+def _comparable(text):
+    """
+    Reduce text to what two spellings of the same speech must share.
+
+    Whisper's segment text and the concatenation of its words differ in spacing
+    and sometimes punctuation, so only letters and digits are compared - enough
+    to catch a truncated or mismatched word list, loose enough not to reject a
+    correct one over a comma.
+    """
+    return ''.join(character for character in text.lower() if character.isalnum())
 
 
 def _numeric(value):

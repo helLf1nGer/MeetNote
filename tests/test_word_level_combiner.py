@@ -9,6 +9,9 @@ to satisfy every contract the segment-level ones do - plus the splitting that is
 the reason it exists.
 """
 
+import re
+from pathlib import Path
+
 import pytest
 
 from utils import weighted_combiner, word_level_combiner
@@ -190,6 +193,56 @@ class TestFallbackToWeighted:
         assert got == ['SPEAKER_00']
         assert out[0]['text'] == 'Text that must survive.'
 
+    def test_a_truncated_word_list_delegates_rather_than_dropping_text(self):
+        """
+        Regression test.
+
+        Every entry was structurally valid, so the malformed-entry guard passed
+        it, and the emptiness guard passed too because the words were not blank -
+        but the list covered only the first word, so the rest of the utterance
+        was silently discarded. Structural validity is not the same as accounting
+        for the segment's text.
+        """
+        transcription = [{
+            'start': 0.0, 'end': 2.0, 'text': 'hello world',
+            'words': words((0.0, 0.5, 'hello')),
+        }]
+        diarization = [{'start': 0.0, 'end': 2.0, 'speaker': 'SPEAKER_00'}]
+
+        out, got = combine(transcription, diarization)
+        assert got == ['SPEAKER_00']
+        assert out[0]['text'] == 'hello world'
+
+    def test_a_word_list_missing_the_middle_delegates(self):
+        transcription = [{
+            'start': 0.0, 'end': 3.0, 'text': 'one two three',
+            'words': words((0.0, 0.5, 'one'), (2.0, 2.5, ' three')),
+        }]
+        diarization = [{'start': 0.0, 'end': 3.0, 'speaker': 'SPEAKER_00'}]
+
+        out, _ = combine(transcription, diarization)
+        assert out[0]['text'] == 'one two three'
+
+    @pytest.mark.parametrize('text,pieces', [
+        ('Hello, world!', ['Hello,', ' world!']),
+        ('Привіт, як справи?', ['Привіт,', ' як', ' справи?']),
+        ("it's fine", ["it's", ' fine']),
+        ('one  two', ['one', '  two']),
+        ('Yes - really.', ['Yes', ' -', ' really.']),
+    ])
+    def test_spacing_and_punctuation_differences_keep_the_word_data(self, text, pieces):
+        """
+        The completeness check must not be so strict that it rejects correct
+        word lists: Whisper's segment text and its concatenated words routinely
+        differ in whitespace and punctuation placement.
+        """
+        segment = {
+            'start': 0.0, 'end': 2.0, 'text': text,
+            'words': [{'start': i * 0.5, 'end': i * 0.5 + 0.4, 'word': p}
+                      for i, p in enumerate(pieces)],
+        }
+        assert word_level_combiner._usable_words(segment, text) is not None
+
     def test_missing_segment_timestamps_still_produce_output(self):
         """
         Both this module and weighted_combiner guard these now; the text has to
@@ -328,9 +381,9 @@ class TestRepoRegressionContracts:
 
     def test_zero_overlap_text_survives_via_the_nearest_turn(self):
         transcription = [
-            {'start': 0.0, 'end': 4.0, 'text': 'First speaker talking about the plan.',
+            {'start': 0.0, 'end': 4.0, 'text': 'First speaker talking',
              'words': words((0.0, 1.0, 'First'), (1.0, 2.0, ' speaker'), (2.0, 3.0, ' talking'))},
-            {'start': 50.0, 'end': 54.0, 'text': 'Speech where diarization found nobody.',
+            {'start': 50.0, 'end': 54.0, 'text': 'Speech where nobody.',
              'words': words((50.0, 51.0, 'Speech'), (51.0, 52.0, ' where'),
                             (52.0, 53.0, ' nobody.'))},
         ]
@@ -361,8 +414,11 @@ class TestRepoRegressionContracts:
         the words spoken during the backchannel go to it, and the surrounding
         words stay with the speaker who holds the floor.
         """
+        # The segment text is the concatenation of its own words: Whisper does
+        # not emit a text that disagrees with them, and a list that fails to
+        # account for the text is now treated as truncated and delegated.
         transcription = [{
-            'start': 10.0, 'end': 15.0, 'text': 'so the plan is to expand.',
+            'start': 10.0, 'end': 15.0, 'text': 'so the mhm is to expand.',
             'words': words((10.0, 10.3, 'so'), (10.3, 10.5, ' the'),      # SPEAKER_00
                            (11.0, 11.5, ' mhm'),                          # inside the backchannel
                            (13.0, 13.4, ' is'), (13.4, 13.7, ' to'),      # SPEAKER_00 again
@@ -404,8 +460,9 @@ class TestRepoRegressionContracts:
         overlap/turn_duration. Raw overlap is compared first here, so a brief
         turn only ever wins when the coverage is genuinely identical.
         """
+        # One long word, so the segment text matches its word list exactly.
         transcription = [{
-            'start': 10.0, 'end': 14.0, 'text': 'a longer stretch of speech',
+            'start': 10.0, 'end': 14.0, 'text': 'aaaa',
             'words': words((10.0, 14.0, 'aaaa')),
         }]
         diarization = [
@@ -523,9 +580,9 @@ class TestOutputShape:
 
     def _out(self):
         transcription = [
-            {'start': 0.0, 'end': 4.0, 'text': 'First utterance in the meeting.',
+            {'start': 0.0, 'end': 4.0, 'text': 'First utterance',
              'words': words((0.0, 1.0, 'First'), (1.0, 2.0, ' utterance'))},
-            {'start': 4.5, 'end': 8.0, 'text': 'Second utterance in the meeting.',
+            {'start': 4.5, 'end': 8.0, 'text': 'Second utterance',
              'words': words((4.5, 5.5, 'Second'), (5.5, 6.5, ' utterance'))},
         ]
         diarization = [
@@ -569,7 +626,7 @@ class TestOutputShape:
 
     def test_the_input_is_not_mutated(self):
         transcription = [{
-            'start': 0.0, 'end': 2.0, 'text': 'do not touch me',
+            'start': 0.0, 'end': 2.0, 'text': 'do not',
             'words': words((0.0, 0.5, 'do'), (0.5, 1.0, ' not')),
         }]
         diarization = [{'start': 0.0, 'end': 2.0, 'speaker': 'SPEAKER_00'}]
@@ -765,10 +822,11 @@ class TestMergeTurns:
         ]
         assert len(word_level_combiner._merge_turns(turns)) == 2
 
-    def test_fragments_merge_across_an_interleaved_speaker(self):
+    def test_fragments_merge_across_a_speaker_listed_in_between(self):
         """
-        Grouping is per speaker, not between list neighbours: a crosstalk turn
-        listed in between does not make one person's pieces discontinuous.
+        Grouping is per speaker, not between list neighbours. The crosstalk turn
+        here sits inside the first fragment rather than in the gap between the
+        two, so it does not make them discontinuous.
         """
         merged = word_level_combiner._merge_turns([
             {'start': 0.0, 'end': 1.0, 'speaker': 'SPEAKER_00'},
@@ -776,6 +834,59 @@ class TestMergeTurns:
             {'start': 1.0, 'end': 2.0, 'speaker': 'SPEAKER_00'},
         ])
         assert {'start': 0.0, 'end': 2.0, 'speaker': 'SPEAKER_00'} in merged
+        assert len(merged) == 2
+
+    def test_a_gap_filled_by_another_speaker_is_not_bridged(self):
+        """
+        Regression test.
+
+        Merging per speaker without checking the gap handed a brief interjection
+        to whoever spoke either side of it: A[0,1] + A[1.09,2] became A[0,2],
+        swallowing B entirely. Bridging across another speaker is the exact
+        mis-attribution this combiner exists to prevent.
+        """
+        turns = [
+            {'start': 0.0, 'end': 1.0, 'speaker': 'A'},
+            {'start': 1.01, 'end': 1.08, 'speaker': 'B'},
+            {'start': 1.09, 'end': 2.0, 'speaker': 'A'},
+        ]
+
+        merged = word_level_combiner._merge_turns(turns)
+        assert len(merged) == 3
+        assert {'start': 0.0, 'end': 2.0, 'speaker': 'A'} not in merged
+        # B is the only speaker with any overlap in that window.
+        assert word_level_combiner._assign(1.0, 1.09, merged) == 'B'
+
+    def test_an_empty_gap_of_the_same_width_still_merges(self):
+        # The gap width is unchanged from the case above; only the occupancy is.
+        merged = word_level_combiner._merge_turns([
+            {'start': 0.0, 'end': 1.0, 'speaker': 'A'},
+            {'start': 1.09, 'end': 2.0, 'speaker': 'A'},
+        ])
+        assert merged == [{'start': 0.0, 'end': 2.0, 'speaker': 'A'}]
+
+    def test_a_gap_exactly_at_the_boundary_merges(self):
+        """
+        Regression test.
+
+        The threshold is documented as inclusive, but 1.1 - 1.0 evaluates to
+        0.10000000000000009 in binary floating point, so an exact `<= 0.1`
+        comparison rejected turns precisely one window apart.
+        """
+        merged = word_level_combiner._merge_turns([
+            {'start': 0.0, 'end': 1.0, 'speaker': 'A'},
+            {'start': 1.0 + word_level_combiner.MERGE_TURN_GAP_SECONDS,
+             'end': 2.0, 'speaker': 'A'},
+        ])
+        assert len(merged) == 1
+
+    def test_the_tolerance_cannot_bridge_a_meaningful_gap(self):
+        # It exists only to absorb float representation error.
+        assert word_level_combiner.GAP_TOLERANCE_SECONDS < 0.001
+        merged = word_level_combiner._merge_turns([
+            {'start': 0.0, 'end': 1.0, 'speaker': 'A'},
+            {'start': 1.5, 'end': 2.0, 'speaker': 'A'},
+        ])
         assert len(merged) == 2
 
     def test_the_result_is_sorted_by_start(self):
@@ -844,6 +955,53 @@ class TestOutOfOrderWordTimestamps:
         # by time, so a word timestamped earlier than the one printed before it
         # legitimately moves. No word may be lost.
         assert sorted(' '.join(s['text'] for s in out).split()) == ['mine', 'too', 'yours']
+
+
+def test_the_per_word_fixtures_actually_reach_the_per_word_path():
+    """
+    Guards the tests themselves.
+
+    A fixture whose word list does not account for its text is now treated as
+    truncated and delegated to weighted, so such a fixture would keep passing
+    while testing none of the per-word logic. That is how two of these tests were
+    silently reduced to fallback coverage. Every fixture is therefore checked to
+    be self-consistent, except the few that are deliberately not.
+    """
+    deliberately_inconsistent = {
+        # Truncation regression tests - the mismatch IS the input under test.
+        'hello world',
+        'one two three',
+        # Delegation is forced by the diarization side in these, so the word
+        # list is irrelevant to what they assert.
+        'Talking with no diarization at all.',
+        'Still has to come out.',
+    }
+
+    source = Path(__file__).read_text(encoding='utf-8')
+    fixtures = re.findall(
+        r"\{\s*'start':[^{}]*?'text':\s*'([^']*)',\s*\n?\s*'words':\s*words\("
+        r"((?:[^()]|\([^()]*\))*)\)",
+        source,
+    )
+    assert len(fixtures) > 20, 'fixture scan found suspiciously few segments'
+
+    unexpected = []
+    for text, word_source in fixtures:
+        pieces = re.findall(r"\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*'([^']*)'\s*\)", word_source)
+        if not pieces:
+            continue
+        joined = ''.join(pieces).strip()
+        consistent = (
+            word_level_combiner._comparable(joined)
+            == word_level_combiner._comparable(text)
+        )
+        if not consistent and text not in deliberately_inconsistent:
+            unexpected.append((text, joined))
+
+    assert not unexpected, (
+        'these fixtures silently fall back instead of testing per-word logic: '
+        f'{unexpected}'
+    )
 
 
 def test_dispatch_knows_the_method():

@@ -332,6 +332,36 @@ class TestSidecars:
         assert blocks[0].splitlines()[1] == '00:00:10,000 --> 00:00:10,500'
         assert blocks[1].splitlines()[1] == '00:00:20,000 --> 00:00:20,500'
 
+    def test_srt_clamps_a_span_that_collapses_when_rounded(self, tmp_path, isolated_config):
+        """
+        Regression test.
+
+        The clamp compares seconds, but the cue is written to millisecond
+        precision. A span under half a millisecond passed the clamp and then
+        rounded to the same stamp at both ends, producing a cue that displays for
+        no time at all - which is what the clamp exists to prevent.
+        """
+        out, _ = self._run(tmp_path, isolated_config, transcript=[
+            {'speaker': 'SPEAKER_00', 'text': 'blip', 'start': 1.0004, 'end': 1.00049},
+        ])
+        line = (out / 'встреча_transcription.srt').read_text(
+            encoding='utf-8'
+        ).splitlines()[1]
+
+        begin, finish = (part.strip() for part in line.split('-->'))
+        assert begin != finish
+        assert line == '00:00:01,000 --> 00:00:01,500'
+
+    def test_srt_keeps_a_span_that_survives_rounding(self, tmp_path, isolated_config):
+        # One millisecond is short but real; it must not be widened.
+        out, _ = self._run(tmp_path, isolated_config, transcript=[
+            {'speaker': 'SPEAKER_00', 'text': 'tick', 'start': 1.0, 'end': 1.001},
+        ])
+        line = (out / 'встреча_transcription.srt').read_text(
+            encoding='utf-8'
+        ).splitlines()[1]
+        assert line == '00:00:01,000 --> 00:00:01,001'
+
     def test_srt_cues_keep_exact_milliseconds(self, tmp_path, isolated_config):
         # word_timestamps=True makes 0.001-step values routine, and those are
         # exactly the ones binary floats store just below the value.

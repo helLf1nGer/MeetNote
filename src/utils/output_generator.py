@@ -211,6 +211,13 @@ def _write_srt(final_transcription, path, original_file_path):
         for index, (start, end, item) in enumerate(cues, start=1):
             begin = _format_timestamp(start, srt=True)
             finish = _format_timestamp(end, srt=True)
+            # The clamp above works in seconds, but the cue is written to
+            # millisecond precision: a span shorter than half a millisecond
+            # rounds to the same stamp at both ends and displays for no time at
+            # all. Checked on the rendered strings, since that is what a player
+            # actually reads.
+            if finish == begin:
+                finish = _format_timestamp(start + MIN_CUE_SECONDS, srt=True)
             speaker = item.get('speaker', 'Unknown')
             f.write(f"{index}\n")
             f.write(f"{begin} --> {finish}\n")
