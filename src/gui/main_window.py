@@ -24,6 +24,7 @@ from ttkbootstrap.dialogs import Messagebox
 import cv2
 from mutagen import File as MutagenFile
 
+from audio.file_processor import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS
 from utils.config_manager import ConfigManager
 from utils.languages import (
     DEFAULT_LANGUAGE,
@@ -41,13 +42,33 @@ logger = logging.getLogger(__name__)
 # Initialize configuration manager
 config_manager = ConfigManager()
 
+# Choices for the browser's type filter. An empty value means no restriction.
+# Built from audio.file_processor so a format added there shows up here without
+# a second edit, then followed by the individual extensions actually present -
+# picking one specific container is the common case when a directory holds
+# camera video next to voice recordings.
+FILTER_ALL = 'All supported'
+FILTER_AUDIO = 'Audio only'
+FILTER_VIDEO = 'Video only'
+
+FILE_TYPE_FILTERS = {
+    FILTER_ALL: (),
+    FILTER_AUDIO: tuple(sorted(AUDIO_EXTENSIONS)),
+    FILTER_VIDEO: tuple(sorted(VIDEO_EXTENSIONS)),
+    **{ext: (ext,) for ext in sorted(AUDIO_EXTENSIONS | VIDEO_EXTENSIONS)},
+}
+
 
 class MediaFile:
     """Model class representing a media file with its properties."""
     
+    # Taken from audio.file_processor rather than restated here. The two lists
+    # had drifted apart: .opus, .wma, .aiff, .m4v, .mpg, .mpeg and .wmv all
+    # process correctly but were invisible in the browser, so the only way to
+    # transcribe one was the command line.
     SUPPORTED_EXTENSIONS = {
-        'audio': ['.mp3', '.wav', '.m4a', '.flac', '.aac', '.ogg'],
-        'video': ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.webm']
+        'audio': sorted(AUDIO_EXTENSIONS),
+        'video': sorted(VIDEO_EXTENSIONS),
     }
     
     def __init__(self, path: str):
@@ -191,6 +212,10 @@ class FileBrowser(ttk.Treeview):
         self.media_files = {}  # Cache for media files
         self.file_loading_thread = None
         self.loading_queue = queue.Queue()
+        # Extensions currently shown. None means "everything supported"; the
+        # filter narrows the view only, so it never hides a file the pipeline
+        # could not process anyway.
+        self.extension_filter = None
         
         # Bind events
         self.bind("<Double-1>", self.on_double_click)
@@ -285,7 +310,8 @@ class FileBrowser(ttk.Treeview):
         try:
             files = [f for f in os.listdir(directory_path)
                     if os.path.isfile(os.path.join(directory_path, f))
-                    and MediaFile.is_supported(os.path.join(directory_path, f))]
+                    and MediaFile.is_supported(os.path.join(directory_path, f))
+                    and self._passes_filter(f)]
             
             # If we have a small number of files, load them directly
             if len(files) < 20:
@@ -328,8 +354,8 @@ class FileBrowser(ttk.Treeview):
                     # Check if it's a supported media file
                     ext = os.path.splitext(item)[1].lower()
                     all_extensions = MediaFile.SUPPORTED_EXTENSIONS['audio'] + MediaFile.SUPPORTED_EXTENSIONS['video']
-                    
-                    if ext in all_extensions:
+
+                    if ext in all_extensions and self._passes_filter(item):
                         # Create a MediaFile object
                         media_file = MediaFile(full_path)
                         self.media_files[full_path] = media_file
@@ -436,6 +462,24 @@ class FileBrowser(ttk.Treeview):
         # Reverse the sort order for the next click
         self.heading(column, command=lambda: self.sort_column(column, not reverse))
     
+    def set_extension_filter(self, extensions):
+        """
+        Restrict the view to ``extensions``, or show everything when falsy.
+
+        Re-reads the directory rather than hiding rows in place: Treeview has no
+        real hidden state (detach/reattach loses ordering), and repopulating
+        keeps one code path for what is on screen.
+        """
+        self.extension_filter = {e.lower() for e in extensions} if extensions else None
+        if self.directory_path:
+            self.populate(self.directory_path)
+
+    def _passes_filter(self, file_name: str) -> bool:
+        """Whether a supported file also passes the active extension filter."""
+        if not self.extension_filter:
+            return True
+        return os.path.splitext(file_name)[1].lower() in self.extension_filter
+
     def get_selected_file(self) -> Optional[str]:
         """Get the path of the selected file."""
         selected_items = self.selection()
@@ -812,6 +856,17 @@ class MainWindow:
                                    command=self._refresh_file_browser,
                                    style='secondary.TButton')
         refresh_button.pack(side=LEFT, padx=(10, 0))
+
+        # Type filter. The browser lists every format the pipeline accepts,
+        # which is a lot of rows in a mixed directory; this narrows the view
+        # without ever hiding something that could have been processed.
+        ttk.Label(browse_frame, text='Show:').pack(side=LEFT, padx=(15, 5))
+        self.type_filter = ttk.StringVar(value=FILTER_ALL)
+        filter_box = ttk.Combobox(browse_frame, textvariable=self.type_filter,
+                                  values=list(FILE_TYPE_FILTERS), state='readonly',
+                                  width=18)
+        filter_box.pack(side=LEFT)
+        filter_box.bind('<<ComboboxSelected>>', self._apply_type_filter)
         
         # File browser with modern styling
         browser_frame = ttk.LabelFrame(file_frame, text="Media Files", padding="10",
@@ -855,6 +910,12 @@ class MainWindow:
         """Refresh the file browser with the current directory."""
         if self.file_browser.directory_path:
             self.file_browser.populate(self.file_browser.directory_path)
+
+    def _apply_type_filter(self, event=None):
+        """Narrow the browser to the selected group of file types."""
+        choice = self.type_filter.get()
+        self.file_browser.set_extension_filter(FILE_TYPE_FILTERS.get(choice))
+        self.set_status(f"Showing: {choice}")
     
     def browse_directory(self):
         """Browse for a directory containing media files."""
