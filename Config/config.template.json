@@ -44,7 +44,7 @@
         "line_spacing": 1.2
     },
     "output": {
-        "formats": ["pdf", "txt", "json", "srt", "md"],
+        "formats": ["pdf"],
         "timestamps_in_pdf": true
     },
     "combiner": {

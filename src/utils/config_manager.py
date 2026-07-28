@@ -47,11 +47,17 @@ DEFAULT_DECODE_OPTIONS = {
     'hotwords': None,
 }
 
-# Files written per transcription. Kept here rather than in output_generator so
-# the GUI and the config template can read it without importing fpdf; the
-# writers themselves live in utils/output_generator.py, which validates names
-# against this list.
-DEFAULT_OUTPUT_FORMATS = ['pdf', 'txt', 'json', 'srt', 'md']
+# Every format that can be written. Kept here rather than in output_generator so
+# the GUI and the config template can read it without importing fpdf; the writers
+# themselves live in utils/output_generator.py, which validates names against
+# this list.
+SUPPORTED_OUTPUT_FORMATS = ['pdf', 'txt', 'json', 'srt', 'md']
+
+# What a fresh install writes. Deliberately narrower than the supported set:
+# the PDF is what almost every run is actually read from, and emitting four extra
+# files by default is churn - noticeably so when the output directory is a synced
+# cloud folder. The rest are one checkbox away in the GUI.
+DEFAULT_OUTPUT_FORMATS = ['pdf']
 
 
 class ConfigManager:

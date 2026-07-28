@@ -3,7 +3,12 @@
 import json
 import os
 
-from utils.config_manager import DEFAULT_DECODE_OPTIONS, ConfigManager
+from utils.config_manager import (
+    DEFAULT_DECODE_OPTIONS,
+    DEFAULT_OUTPUT_FORMATS,
+    SUPPORTED_OUTPUT_FORMATS,
+    ConfigManager,
+)
 
 
 def test_instances_are_shared_per_file():
@@ -39,6 +44,36 @@ def test_template_diarization_block_matches_the_code_defaults():
     # The template omits `model`, which the GUI writes on first use.
     defaults = manager._get_default_config()['diarization']
     assert template['diarization'] == defaults
+
+
+def test_template_output_block_matches_the_code_defaults():
+    """Same drift risk as the decode block: two seeding paths, one behaviour."""
+    manager = ConfigManager()
+    with open(os.path.join(manager.config_dir, 'config.template.json'), encoding='utf-8') as f:
+        template = json.load(f)
+    assert template['output']['formats'] == DEFAULT_OUTPUT_FORMATS
+
+
+def test_the_default_output_is_pdf_only():
+    """
+    A fresh install writes one file, not five.
+
+    The PDF is what nearly every run is read from; the other four are opt-in.
+    Emitting them unasked is churn, and worse when the output directory is a
+    synced cloud folder.
+    """
+    assert DEFAULT_OUTPUT_FORMATS == ['pdf']
+
+
+def test_every_default_format_is_a_supported_one():
+    assert set(DEFAULT_OUTPUT_FORMATS) <= set(SUPPORTED_OUTPUT_FORMATS)
+
+
+def test_defaults_and_supported_formats_are_distinct_objects():
+    # SUPPORTED_FORMATS in output_generator was briefly derived from the
+    # defaults, which turned every opt-in format into an 'unknown format'.
+    assert DEFAULT_OUTPUT_FORMATS is not SUPPORTED_OUTPUT_FORMATS
+    assert len(SUPPORTED_OUTPUT_FORMATS) > len(DEFAULT_OUTPUT_FORMATS)
 
 
 def test_decode_defaults_are_not_shared_between_configs():

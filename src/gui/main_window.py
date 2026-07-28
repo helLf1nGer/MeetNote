@@ -25,7 +25,11 @@ import cv2
 from mutagen import File as MutagenFile
 
 from audio.file_processor import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS
-from utils.config_manager import ConfigManager
+from utils.config_manager import (
+    DEFAULT_OUTPUT_FORMATS,
+    SUPPORTED_OUTPUT_FORMATS,
+    ConfigManager,
+)
 from utils.languages import (
     DEFAULT_LANGUAGE,
     SUPPORTED_LANGUAGES,
@@ -47,6 +51,10 @@ config_manager = ConfigManager()
 # a second edit, then followed by the individual extensions actually present -
 # picking one specific container is the common case when a directory holds
 # camera video next to voice recordings.
+# The one format that is always written: create_pdf returns its path and the
+# transcription tracker records it, so deselecting it would break both.
+PRIMARY_OUTPUT_FORMAT = 'pdf'
+
 FILTER_ALL = 'All supported'
 FILTER_AUDIO = 'Audio only'
 FILTER_VIDEO = 'Video only'
@@ -525,6 +533,20 @@ class SettingsPanel(ttk.Frame):
             value=self.config.get('transcription', {}).get('language', DEFAULT_LANGUAGE)
         )
 
+        # One BooleanVar per format. Unknown names in a hand-edited config are
+        # ignored here and warned about by output_generator, so a typo cannot
+        # make the panel fail to build.
+        selected = self.config.get('output', {}).get('formats')
+        if not isinstance(selected, (list, tuple)):
+            selected = DEFAULT_OUTPUT_FORMATS
+        selected = {str(name).strip().lower() for name in selected}
+        self.output_formats = {
+            fmt: ttk.BooleanVar(
+                value=True if fmt == PRIMARY_OUTPUT_FORMAT else fmt in selected
+            )
+            for fmt in SUPPORTED_OUTPUT_FORMATS
+        }
+
         # Add traces to update config when values change
         self.num_speakers.trace_add('write', self._update_config)
         self.diarization_model.trace_add('write', self._update_config)
@@ -533,6 +555,8 @@ class SettingsPanel(ttk.Frame):
         self.processing_location.trace_add('write', self._update_config)
         self.combiner_method.trace_add('write', self._update_config)
         self.language.trace_add('write', self._update_config)
+        for variable in self.output_formats.values():
+            variable.trace_add('write', self._update_config)
         
         self._create_widgets()
     
@@ -546,8 +570,26 @@ class SettingsPanel(ttk.Frame):
         dir_frame = ttk.Frame(output_frame)
         dir_frame.pack(fill=X)
         ttk.Entry(dir_frame, textvariable=self.output_directory).pack(side=LEFT, fill=X, expand=YES, padx=(0, 5))
-        ttk.Button(dir_frame, text="📁", command=self._browse_output_directory, 
+        ttk.Button(dir_frame, text="📁", command=self._browse_output_directory,
                   style='primary-outline.TButton', width=3).pack(side=RIGHT)
+
+        # Output formats. The PDF checkbox is shown but disabled: it is the
+        # pipeline's return value and what the transcription tracker records, so
+        # it is written whether or not it is ticked. Showing it greyed is more
+        # honest than a list that silently ignores one entry.
+        ttk.Label(output_frame, text='Also write:',
+                  font=("TkDefaultFont", 10)).pack(fill=X, pady=(10, 5))
+        formats_frame = ttk.Frame(output_frame)
+        formats_frame.pack(fill=X)
+
+        for fmt in SUPPORTED_OUTPUT_FORMATS:
+            always_on = fmt == PRIMARY_OUTPUT_FORMAT
+            label = f"{fmt} (always)" if always_on else fmt
+            ttk.Checkbutton(
+                formats_frame, text=label, variable=self.output_formats[fmt],
+                state=DISABLED if always_on else NORMAL,
+                bootstyle="primary-round-toggle" if not always_on else "secondary",
+            ).pack(side=LEFT, padx=(0, 10))
         
         # Diarization Settings
         diar_frame = ttk.LabelFrame(self, text="Diarization Settings", padding="10", bootstyle="primary")
@@ -673,6 +715,15 @@ class SettingsPanel(ttk.Frame):
         if 'combiner' not in self.config:
             self.config['combiner'] = {}
         self.config['combiner']['method'] = self.combiner_method.get()
+
+        # Update output formats, keeping the supported order rather than tick
+        # order so the saved config reads the same way every time.
+        if 'output' not in self.config:
+            self.config['output'] = {}
+        self.config['output']['formats'] = [
+            fmt for fmt in SUPPORTED_OUTPUT_FORMATS
+            if fmt == PRIMARY_OUTPUT_FORMAT or self.output_formats[fmt].get()
+        ]
 
         # Save config
         config_manager.save_config()

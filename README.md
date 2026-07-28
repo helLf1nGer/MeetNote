@@ -206,26 +206,31 @@ Note: Ensure your Groq API key is correctly set in the `.env` file when using th
 
 ## Output Formats
 
-Every transcription writes a PDF plus a set of sidecar files sharing its
-basename, all UTF-8:
+By default a transcription writes **one file: the PDF**. Four more are available
+as opt-in sidecars sharing the same basename, all UTF-8:
 
-| Format | Contents |
-| ------ | -------- |
-| `.pdf` | The primary artifact; each line prefixed `[HH:MM:SS]` |
-| `.txt` | `[HH:MM:SS] SPEAKER: text`, one line per segment |
-| `.json` | `[{"start", "end", "speaker", "text"}, ...]` with numeric seconds |
-| `.srt` | SubRip subtitles, for captioned playback of the recording |
-| `.md` | Meeting notes; consecutive segments from one speaker merged |
+| Format | Default | Contents |
+| ------ | ------- | -------- |
+| `.pdf` | always | The primary artifact; each line prefixed `[HH:MM:SS]` |
+| `.txt` | off | `[HH:MM:SS] SPEAKER: text`, one line per segment |
+| `.json` | off | `[{"start", "end", "speaker", "text"}, ...]` with numeric seconds |
+| `.srt` | off | SubRip subtitles, for captioned playback of the recording |
+| `.md` | off | Meeting notes; consecutive segments from one speaker merged |
+
+Tick the ones you want under **Output Settings → Also write** in the GUI; the
+choice is saved to your config like any other setting. Or set it directly:
 
 ```json
 "output": {
-    "formats": ["pdf", "txt", "json", "srt", "md"],
+    "formats": ["pdf", "srt"],
     "timestamps_in_pdf": true
 }
 ```
 
-- `formats`: which files to write. Drop the ones you do not want. `pdf` is
-  always produced regardless, since it is the recorded output of a run.
+- `formats`: which files to write. `pdf` is produced regardless of whether it is
+  listed, since it is the recorded output of a run — which is also why its
+  checkbox is shown greyed rather than hidden. Unknown names are warned about
+  and skipped.
 - `timestamps_in_pdf`: set to `false` for a PDF of bare `SPEAKER: text` lines.
   This is a PDF-layout preference only — the sidecars keep their timestamps.
 

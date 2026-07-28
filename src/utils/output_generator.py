@@ -6,7 +6,11 @@ from pathlib import Path
 
 from fpdf import FPDF
 
-from .config_manager import DEFAULT_OUTPUT_FORMATS, ConfigManager
+from .config_manager import (
+    DEFAULT_OUTPUT_FORMATS,
+    SUPPORTED_OUTPUT_FORMATS,
+    ConfigManager,
+)
 
 logger = logging.getLogger(__name__)
 config_manager = ConfigManager()
@@ -22,7 +26,10 @@ UNICODE_FONT_CANDIDATES = [
 
 # Every format create_pdf knows how to emit. 'pdf' is included for
 # completeness, but it is written unconditionally - see _resolve_formats.
-SUPPORTED_FORMATS = tuple(DEFAULT_OUTPUT_FORMATS)
+# Distinct from DEFAULT_OUTPUT_FORMATS, which is only what a fresh install
+# selects: validating against the defaults would reject every format the user
+# had to opt into.
+SUPPORTED_FORMATS = tuple(SUPPORTED_OUTPUT_FORMATS)
 
 # Minimum on-screen duration for a subtitle cue whose end timestamp is missing
 # or not after its start; most players silently drop zero-length cues.

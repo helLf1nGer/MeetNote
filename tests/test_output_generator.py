@@ -13,6 +13,10 @@ pytest.importorskip('fpdf', reason='fpdf2 not installed')
 from fpdf import FPDF  # noqa: E402
 
 from utils import output_generator  # noqa: E402
+from utils.config_manager import (  # noqa: E402
+    DEFAULT_OUTPUT_FORMATS,
+    SUPPORTED_OUTPUT_FORMATS,
+)
 
 
 def transcript_with_times():
@@ -188,8 +192,19 @@ class TestSegmentLine:
 
 
 class TestResolveFormats:
-    def test_default_is_every_format(self):
-        assert output_generator._resolve_formats(None) == ['pdf', 'txt', 'json', 'srt', 'md']
+    def test_default_is_pdf_only(self):
+        """
+        The PDF is what almost every run is read from; writing four more files
+        by default is churn, and worse when the output directory is a synced
+        cloud folder. The rest are opt-in via the GUI or config.
+        """
+        assert output_generator._resolve_formats(None) == ['pdf']
+
+    def test_every_supported_format_can_be_opted_into(self):
+        # Regression guard: SUPPORTED_FORMATS was briefly derived from the
+        # defaults, which made every opted-in format an 'unknown format'.
+        requested = list(SUPPORTED_OUTPUT_FORMATS)
+        assert output_generator._resolve_formats(requested) == requested
 
     def test_unknown_names_are_dropped(self, caplog):
         with caplog.at_level('WARNING'):
@@ -210,15 +225,19 @@ class TestResolveFormats:
     def test_a_non_list_falls_back_to_defaults(self, caplog):
         with caplog.at_level('WARNING'):
             formats = output_generator._resolve_formats({'txt': True})
-        assert formats == ['pdf', 'txt', 'json', 'srt', 'md']
+        assert formats == list(DEFAULT_OUTPUT_FORMATS)
 
 
 class TestSidecars:
     """create_pdf writes the sidecars alongside the PDF, same basename."""
 
     def _run(self, tmp_path, isolated_config, transcript=None, formats=None, source='встреча.mp4'):
-        options = {} if formats is None else {'formats': formats}
-        out_dir = _configure(tmp_path, isolated_config, **options)
+        # These tests are about what each writer emits, so they opt into every
+        # format explicitly rather than relying on the default - which is
+        # deliberately pdf-only, and is asserted as such in TestResolveFormats.
+        if formats is None:
+            formats = list(SUPPORTED_OUTPUT_FORMATS)
+        out_dir = _configure(tmp_path, isolated_config, formats=formats)
 
         transcript = transcript_with_times() if transcript is None else transcript
         pdf = output_generator.create_pdf(transcript, f'/some/where/{source}')
@@ -441,14 +460,28 @@ class TestMalformedOutputBlock:
 
     def test_it_falls_back_to_the_default_formats(self, tmp_path, isolated_config):
         out, _ = self._run_with_output_block(tmp_path, isolated_config, 'bad')
-        # Every default sidecar, as though the block had been absent.
-        for suffix in ('.pdf', '.txt', '.json', '.srt', '.md'):
-            assert (out / f'встреча_transcription{suffix}').is_file()
+        # Exactly the defaults, as though the block had been absent.
+        for fmt in DEFAULT_OUTPUT_FORMATS:
+            assert (out / f'встреча_transcription.{fmt}').is_file()
+        for fmt in set(SUPPORTED_OUTPUT_FORMATS) - set(DEFAULT_OUTPUT_FORMATS):
+            assert not (out / f'встреча_transcription.{fmt}').exists()
 
     def test_timestamps_keep_their_default(self, tmp_path, isolated_config):
-        out, _ = self._run_with_output_block(tmp_path, isolated_config, 'bad')
-        lines = (out / 'встреча_transcription.txt').read_text(encoding='utf-8').splitlines()
-        assert lines[0].startswith('[00:00:00] ')
+        # timestamps_in_pdf defaults to True, which the PDF lines reflect.
+        rendered = []
+        real_multi_cell = FPDF.multi_cell
+
+        def spy(self, w, h=0, text='', *args, **kwargs):
+            rendered.append(text)
+            return real_multi_cell(self, w, h, text, *args, **kwargs)
+
+        FPDF.multi_cell = spy
+        try:
+            self._run_with_output_block(tmp_path, isolated_config, 'bad')
+        finally:
+            FPDF.multi_cell = real_multi_cell
+
+        assert rendered and rendered[0].startswith('[00:00:00] ')
 
 
 class TestPdfTimestamps:
@@ -477,7 +510,8 @@ class TestPdfTimestamps:
         self, tmp_path, isolated_config
     ):
         # timestamps_in_pdf is a PDF-layout preference, not a data switch.
-        out = _configure(tmp_path, isolated_config, timestamps_in_pdf=False)
+        out = _configure(tmp_path, isolated_config,
+                         formats=['pdf', 'txt'], timestamps_in_pdf=False)
 
         output_generator.create_pdf(transcript_with_times(), '/some/where/встреча.mp4')
 
