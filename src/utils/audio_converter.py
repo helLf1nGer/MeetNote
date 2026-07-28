@@ -55,18 +55,25 @@ def extract_mp3_from_wav(wav_path, output_dir=None, duration=None):
         logger.error(f"Error extracting MP3 from WAV: {str(e)}")
         raise
 
-# Usage example:        
-# extracted_mp3 = extract_mp3_from_wav(r"path/to/your/audio.wav", output_dir=r"path/to/your/audio.wav")
-
 if __name__ == "__main__":
-    # Configure logging
+    # Paths come from the command line rather than being hardcoded here: the
+    # previous version carried a developer's own directory and recording name,
+    # which is both unusable for anyone else and personal information sitting in
+    # a public repository.
+    import argparse
+
     logging.basicConfig(level=logging.INFO)
 
-    # This block will only run if the script is executed directly
-    input_path = r"path/to/your/audio.wav"
-    output_dir = r"path/to/your/audio.wav"
-    
+    parser = argparse.ArgumentParser(description="Extract an MP3 from a WAV file.")
+    parser.add_argument('wav_path', help="Input WAV file.")
+    parser.add_argument('-o', '--output-dir',
+                        help="Directory for the MP3 (default: alongside the input).")
+    parser.add_argument('-d', '--duration', type=int,
+                        help="Milliseconds to extract (default: the whole file).")
+    args = parser.parse_args()
+
     try:
-        extract_mp3_from_wav(input_path, output_dir=output_dir)
+        extract_mp3_from_wav(args.wav_path, output_dir=args.output_dir, duration=args.duration)
     except Exception as e:
         logger.error(f"Failed to extract MP3: {str(e)}")
+        raise SystemExit(1)
